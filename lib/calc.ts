@@ -15,14 +15,20 @@ export interface ParsedCommand {
   amountUsd: number;
 }
 
+export type CommandKind = "cal" | "profit";
+
+export function getCommandKind(input: string): CommandKind {
+  return /^\/?profit\b/i.test(input.trim()) ? "profit" : "cal";
+}
+
 export function parseCommand(input: string): ParsedCommand {
   const trimmed = input.trim();
-  const withoutPrefix = trimmed.replace(/^\/?cal\s+/i, "");
+  const withoutPrefix = trimmed.replace(/^\/?(cal|profit)\s+/i, "");
   const parts = withoutPrefix.split(/\s+/).filter(Boolean);
 
   if (parts.length !== 3) {
     throw new Error(
-      "Cú pháp không đúng. Dùng: /cal <giá_mua> <giá_bán> <số_tiền_usd>"
+      "Cú pháp không đúng. Dùng: /cal <giá_mua> <giá_bán> <số_tiền_usd> hoặc /profit <entry> <sell> <vốn>"
     );
   }
 

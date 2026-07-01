@@ -1,10 +1,11 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { calculate, parseCommand, type CalcResult } from "@/lib/calc";
+import { calculate, getCommandKind, parseCommand, type CalcResult } from "@/lib/calc";
 import { formatBtc, formatPercent, formatUsd, formatUsdSigned } from "@/lib/format";
 import { useLivePrice } from "@/lib/useLivePrice";
 import PriceChart, { type PricePoint } from "./PriceChart";
+import ProfitPanel, { type ProfitEntry } from "./ProfitPanel";
 
 interface HistoryItem {
   id: string;
@@ -15,6 +16,7 @@ interface HistoryItem {
 
 const HISTORY_KEY = "btc-cal-history";
 const HISTORY_LIMIT = 10;
+const PROFIT_BOOK_KEY = "btc-profit-book";
 const CHART_APPEND_MS = 30_000;
 const CHART_POINTS_LIMIT = 300;
 
@@ -23,6 +25,7 @@ export default function Calculator() {
   const [result, setResult] = useState<CalcResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [history, setHistory] = useState<HistoryItem[]>([]);
+  const [profitBook, setProfitBook] = useState<ProfitEntry[]>([]);
   const [priceHistory, setPriceHistory] = useState<PricePoint[]>([]);
   const inputRef = useRef<HTMLInputElement>(null);
   const {
@@ -44,6 +47,12 @@ export default function Calculator() {
         const parsed: HistoryItem[] = JSON.parse(stored);
         setHistory(parsed.map((item) => ({ ...item, profitUsd: item.profitUsd ?? 0 })));
       }
+    } catch {
+      // ignore malformed localStorage data
+    }
+    try {
+      const storedProfit = window.localStorage.getItem(PROFIT_BOOK_KEY);
+      if (storedProfit) setProfitBook(JSON.parse(storedProfit));
     } catch {
       // ignore malformed localStorage data
     }
@@ -98,6 +107,15 @@ export default function Calculator() {
     }
   }
 
+  function saveProfitBook(next: ProfitEntry[]) {
+    setProfitBook(next);
+    try {
+      window.localStorage.setItem(PROFIT_BOOK_KEY, JSON.stringify(next));
+    } catch {
+      // localStorage unavailable, skip persisting
+    }
+  }
+
   function handleSubmit() {
     if (!input.trim()) return;
     try {
@@ -106,17 +124,38 @@ export default function Calculator() {
       setResult(calcResult);
       setError(null);
 
-      const item: HistoryItem = {
-        id: `${Date.now()}`,
-        command: parsed.raw,
-        profitPercent: calcResult.profitPercent,
-        profitUsd: calcResult.profitUsd,
-      };
-      saveHistory([item, ...history].slice(0, HISTORY_LIMIT));
+      if (getCommandKind(input) === "profit") {
+        const entry: ProfitEntry = {
+          id: `${Date.now()}`,
+          entry: parsed.buyPrice,
+          sell: parsed.sellPrice,
+          money: parsed.amountUsd,
+          profitUsd: calcResult.profitUsd,
+          profitPercent: calcResult.profitPercent,
+          timestamp: Date.now(),
+        };
+        saveProfitBook([entry, ...profitBook]);
+      } else {
+        const item: HistoryItem = {
+          id: `${Date.now()}`,
+          command: parsed.raw,
+          profitPercent: calcResult.profitPercent,
+          profitUsd: calcResult.profitUsd,
+        };
+        saveHistory([item, ...history].slice(0, HISTORY_LIMIT));
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Lỗi không xác định.");
       setResult(null);
     }
+  }
+
+  function removeProfitEntry(id: string) {
+    saveProfitBook(profitBook.filter((e) => e.id !== id));
+  }
+
+  function clearProfitBook() {
+    saveProfitBook([]);
   }
 
   function handleKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
@@ -125,12 +164,13 @@ export default function Calculator() {
 
   function useCurrentPriceAsSell() {
     if (currentPrice === null) return;
-    const withoutPrefix = input.trim().replace(/^\/?cal\s*/i, "");
+    const kind = getCommandKind(input);
+    const withoutPrefix = input.trim().replace(/^\/?(cal|profit)\s*/i, "");
     const parts = withoutPrefix.split(/\s+/).filter(Boolean);
     const buy = parts[0] ?? "";
     const amount = parts[2] ?? "";
     const sell = currentPrice.toFixed(2);
-    setInput(`/cal ${buy} ${sell} ${amount}`.trim());
+    setInput(`/${kind} ${buy} ${sell} ${amount}`.trim());
     inputRef.current?.focus();
   }
 
@@ -138,7 +178,14 @@ export default function Calculator() {
 
   return (
     <div className="min-h-screen flex flex-col items-center px-4 py-6 sm:py-10">
-      <div className="w-full max-w-2xl flex flex-col gap-5">
+      <div className="w-full max-w-5xl flex flex-col lg:grid lg:grid-cols-[300px_minmax(0,1fr)] gap-5 lg:items-start">
+        <ProfitPanel
+          entries={profitBook}
+          onRemove={removeProfitEntry}
+          onClearAll={clearProfitBook}
+        />
+
+        <div className="flex flex-col gap-5">
         <header className="flex items-center justify-between">
           <h1 className="text-lg sm:text-xl font-bold tracking-tight">
             <span className="text-btc">₿</span> BTC Profit Calculator
@@ -269,6 +316,7 @@ export default function Calculator() {
             </ul>
           </div>
         )}
+        </div>
       </div>
     </div>
   );

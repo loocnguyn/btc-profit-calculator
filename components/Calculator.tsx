@@ -1,0 +1,271 @@
+"use client";
+
+import { useEffect, useRef, useState } from "react";
+import { calculate, parseCommand, type CalcResult } from "@/lib/calc";
+
+interface HistoryItem {
+  id: string;
+  command: string;
+  profitPercent: number;
+}
+
+const HISTORY_KEY = "btc-cal-history";
+const HISTORY_LIMIT = 10;
+const PRICE_REFRESH_MS = 45_000;
+
+function formatUsd(n: number): string {
+  return n.toLocaleString("en-US", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  });
+}
+
+function formatBtc(n: number): string {
+  return n.toLocaleString("en-US", {
+    minimumFractionDigits: 8,
+    maximumFractionDigits: 8,
+  });
+}
+
+function formatPercent(n: number): string {
+  const sign = n > 0 ? "+" : "";
+  return `${sign}${n.toFixed(2)}%`;
+}
+
+export default function Calculator() {
+  const [input, setInput] = useState("");
+  const [result, setResult] = useState<CalcResult | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [history, setHistory] = useState<HistoryItem[]>([]);
+  const [currentPrice, setCurrentPrice] = useState<number | null>(null);
+  const [priceUpdatedAt, setPriceUpdatedAt] = useState<Date | null>(null);
+  const [priceError, setPriceError] = useState(false);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    try {
+      const stored = window.localStorage.getItem(HISTORY_KEY);
+      if (stored) setHistory(JSON.parse(stored));
+    } catch {
+      // ignore malformed localStorage data
+    }
+    inputRef.current?.focus();
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function fetchPrice() {
+      try {
+        const res = await fetch(
+          "https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd"
+        );
+        if (!res.ok) throw new Error("bad response");
+        const data = await res.json();
+        const price = data?.bitcoin?.usd;
+        if (!cancelled && typeof price === "number") {
+          setCurrentPrice(price);
+          setPriceUpdatedAt(new Date());
+          setPriceError(false);
+        }
+      } catch {
+        if (!cancelled) setPriceError(true);
+      }
+    }
+
+    fetchPrice();
+    const interval = setInterval(fetchPrice, PRICE_REFRESH_MS);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, []);
+
+  function saveHistory(next: HistoryItem[]) {
+    setHistory(next);
+    try {
+      window.localStorage.setItem(HISTORY_KEY, JSON.stringify(next));
+    } catch {
+      // localStorage unavailable, skip persisting
+    }
+  }
+
+  function handleSubmit() {
+    if (!input.trim()) return;
+    try {
+      const parsed = parseCommand(input);
+      const calcResult = calculate(parsed);
+      setResult(calcResult);
+      setError(null);
+
+      const item: HistoryItem = {
+        id: `${Date.now()}`,
+        command: parsed.raw,
+        profitPercent: calcResult.profitPercent,
+      };
+      saveHistory([item, ...history].slice(0, HISTORY_LIMIT));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Lỗi không xác định.");
+      setResult(null);
+    }
+  }
+
+  function handleKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
+    if (e.key === "Enter") handleSubmit();
+  }
+
+  function useCurrentPriceAsSell() {
+    if (currentPrice === null) return;
+    const withoutPrefix = input.trim().replace(/^\/?cal\s*/i, "");
+    const parts = withoutPrefix.split(/\s+/).filter(Boolean);
+    const buy = parts[0] ?? "";
+    const amount = parts[2] ?? "";
+    const sell = currentPrice.toFixed(2);
+    setInput(`/cal ${buy} ${sell} ${amount}`.trim());
+    inputRef.current?.focus();
+  }
+
+  const isProfit = result !== null && result.profitPercent >= 0;
+
+  return (
+    <div className="min-h-screen flex flex-col items-center px-4 py-6 sm:py-10">
+      <div className="w-full max-w-2xl flex flex-col gap-5">
+        <header className="flex items-center justify-between">
+          <h1 className="text-lg sm:text-xl font-bold tracking-tight">
+            <span className="text-btc">₿</span> BTC Profit Calculator
+          </h1>
+          <div className="text-right font-mono text-xs sm:text-sm text-neutral-400">
+            {priceError && currentPrice === null ? (
+              <span className="text-loss">Không lấy được giá</span>
+            ) : currentPrice !== null ? (
+              <>
+                <span className="text-neutral-200">
+                  ${formatUsd(currentPrice)}
+                </span>
+                <div className="text-[10px] sm:text-xs text-neutral-500">
+                  cập nhật {priceUpdatedAt?.toLocaleTimeString("vi-VN")}
+                </div>
+              </>
+            ) : (
+              <span>Đang tải giá...</span>
+            )}
+          </div>
+        </header>
+
+        <div className="bg-panel border border-border rounded-xl p-4 sm:p-5 flex flex-col gap-3">
+          <label className="text-xs uppercase tracking-wide text-neutral-500 font-mono">
+            /cal &lt;giá_mua&gt; &lt;giá_bán&gt; &lt;số_tiền_usd&gt;
+          </label>
+          <div className="flex flex-col sm:flex-row gap-2">
+            <input
+              ref={inputRef}
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              onKeyDown={handleKeyDown}
+              placeholder="/cal 59500 63500 151"
+              className="flex-1 bg-bg border border-border rounded-lg px-3 py-2.5 font-mono text-sm sm:text-base text-neutral-100 placeholder:text-neutral-600 outline-none focus:border-btc transition-colors"
+            />
+            <div className="flex gap-2">
+              <button
+                onClick={useCurrentPriceAsSell}
+                disabled={currentPrice === null}
+                className="whitespace-nowrap px-3 py-2.5 rounded-lg border border-border text-xs sm:text-sm font-mono text-neutral-300 hover:border-btc hover:text-btc transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+              >
+                Dùng giá hiện tại
+              </button>
+              <button
+                onClick={handleSubmit}
+                className="px-4 py-2.5 rounded-lg bg-btc text-black font-semibold text-sm sm:text-base hover:brightness-110 transition-all"
+              >
+                Tính
+              </button>
+            </div>
+          </div>
+          {error && (
+            <p className="text-loss text-sm font-mono">{error}</p>
+          )}
+        </div>
+
+        {result && (
+          <div className="bg-panel border border-border rounded-xl p-4 sm:p-5 flex flex-col gap-4">
+            <div className="text-center">
+              <div
+                className={`text-4xl sm:text-5xl font-bold font-mono ${
+                  isProfit ? "text-profit" : "text-loss"
+                }`}
+              >
+                {formatPercent(result.profitPercent)}
+              </div>
+              <div
+                className={`mt-1 text-sm sm:text-base font-mono ${
+                  isProfit ? "text-profit" : "text-loss"
+                }`}
+              >
+                {isProfit ? "+" : ""}
+                {formatUsd(result.profitUsd)} USD
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-x-4 gap-y-2 font-mono text-sm">
+              <Stat label="Giá mua" value={`$${formatUsd(result.buyPrice)}`} />
+              <Stat label="Giá bán" value={`$${formatUsd(result.sellPrice)}`} />
+              <Stat label="Số BTC mua được" value={formatBtc(result.btcBought)} />
+              <Stat label="Vốn bỏ ra" value={`$${formatUsd(result.amountUsd)}`} />
+              <Stat
+                label="Tổng tiền nhận về"
+                value={`$${formatUsd(result.totalReceived)}`}
+              />
+              <Stat
+                label="Lãi / Lỗ"
+                value={`${isProfit ? "+" : ""}$${formatUsd(result.profitUsd)}`}
+                valueClassName={isProfit ? "text-profit" : "text-loss"}
+              />
+            </div>
+          </div>
+        )}
+
+        {history.length > 0 && (
+          <div className="bg-panel border border-border rounded-xl p-4 sm:p-5">
+            <h2 className="text-xs uppercase tracking-wide text-neutral-500 font-mono mb-2">
+              Lịch sử ({history.length})
+            </h2>
+            <ul className="flex flex-col gap-1.5 font-mono text-xs sm:text-sm">
+              {history.map((item) => (
+                <li
+                  key={item.id}
+                  className="flex items-center justify-between gap-2 text-neutral-300"
+                >
+                  <span className="truncate">{item.command}</span>
+                  <span
+                    className={
+                      item.profitPercent >= 0 ? "text-profit" : "text-loss"
+                    }
+                  >
+                    {formatPercent(item.profitPercent)}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function Stat({
+  label,
+  value,
+  valueClassName,
+}: {
+  label: string;
+  value: string;
+  valueClassName?: string;
+}) {
+  return (
+    <div className="flex flex-col">
+      <span className="text-neutral-500 text-xs">{label}</span>
+      <span className={valueClassName ?? "text-neutral-100"}>{value}</span>
+    </div>
+  );
+}

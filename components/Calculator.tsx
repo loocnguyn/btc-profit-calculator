@@ -2,53 +2,48 @@
 
 import { useEffect, useRef, useState } from "react";
 import { calculate, parseCommand, type CalcResult } from "@/lib/calc";
+import { formatBtc, formatPercent, formatUsd, formatUsdSigned } from "@/lib/format";
+import { useLivePrice } from "@/lib/useLivePrice";
 import PriceChart, { type PricePoint } from "./PriceChart";
 
 interface HistoryItem {
   id: string;
   command: string;
   profitPercent: number;
+  profitUsd: number;
 }
 
 const HISTORY_KEY = "btc-cal-history";
 const HISTORY_LIMIT = 10;
-const PRICE_REFRESH_MS = 45_000;
+const CHART_APPEND_MS = 30_000;
 const CHART_POINTS_LIMIT = 300;
-
-function formatUsd(n: number): string {
-  return n.toLocaleString("en-US", {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  });
-}
-
-function formatBtc(n: number): string {
-  return n.toLocaleString("en-US", {
-    minimumFractionDigits: 8,
-    maximumFractionDigits: 8,
-  });
-}
-
-function formatPercent(n: number): string {
-  const sign = n > 0 ? "+" : "";
-  return `${sign}${n.toFixed(2)}%`;
-}
 
 export default function Calculator() {
   const [input, setInput] = useState("");
   const [result, setResult] = useState<CalcResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [history, setHistory] = useState<HistoryItem[]>([]);
-  const [currentPrice, setCurrentPrice] = useState<number | null>(null);
-  const [priceUpdatedAt, setPriceUpdatedAt] = useState<Date | null>(null);
-  const [priceError, setPriceError] = useState(false);
   const [priceHistory, setPriceHistory] = useState<PricePoint[]>([]);
   const inputRef = useRef<HTMLInputElement>(null);
+  const {
+    price: currentPrice,
+    updatedAt: priceUpdatedAt,
+    connected: priceConnected,
+    flash: priceFlash,
+  } = useLivePrice();
+  const currentPriceRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    currentPriceRef.current = currentPrice;
+  }, [currentPrice]);
 
   useEffect(() => {
     try {
       const stored = window.localStorage.getItem(HISTORY_KEY);
-      if (stored) setHistory(JSON.parse(stored));
+      if (stored) {
+        const parsed: HistoryItem[] = JSON.parse(stored);
+        setHistory(parsed.map((item) => ({ ...item, profitUsd: item.profitUsd ?? 0 })));
+      }
     } catch {
       // ignore malformed localStorage data
     }
@@ -81,38 +76,17 @@ export default function Calculator() {
   }, []);
 
   useEffect(() => {
-    let cancelled = false;
-
-    async function fetchPrice() {
-      try {
-        const res = await fetch(
-          "https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd"
-        );
-        if (!res.ok) throw new Error("bad response");
-        const data = await res.json();
-        const price = data?.bitcoin?.usd;
-        if (!cancelled && typeof price === "number") {
-          setCurrentPrice(price);
-          setPriceUpdatedAt(new Date());
-          setPriceError(false);
-          setPriceHistory((prev) => {
-            const next = [...prev, { t: Date.now(), p: price }];
-            return next.length > CHART_POINTS_LIMIT
-              ? next.slice(next.length - CHART_POINTS_LIMIT)
-              : next;
-          });
-        }
-      } catch {
-        if (!cancelled) setPriceError(true);
-      }
-    }
-
-    fetchPrice();
-    const interval = setInterval(fetchPrice, PRICE_REFRESH_MS);
-    return () => {
-      cancelled = true;
-      clearInterval(interval);
-    };
+    const interval = setInterval(() => {
+      const price = currentPriceRef.current;
+      if (price === null) return;
+      setPriceHistory((prev) => {
+        const next = [...prev, { t: Date.now(), p: price }];
+        return next.length > CHART_POINTS_LIMIT
+          ? next.slice(next.length - CHART_POINTS_LIMIT)
+          : next;
+      });
+    }, CHART_APPEND_MS);
+    return () => clearInterval(interval);
   }, []);
 
   function saveHistory(next: HistoryItem[]) {
@@ -136,6 +110,7 @@ export default function Calculator() {
         id: `${Date.now()}`,
         command: parsed.raw,
         profitPercent: calcResult.profitPercent,
+        profitUsd: calcResult.profitUsd,
       };
       saveHistory([item, ...history].slice(0, HISTORY_LIMIT));
     } catch (err) {
@@ -169,19 +144,26 @@ export default function Calculator() {
             <span className="text-btc">₿</span> BTC Profit Calculator
           </h1>
           <div className="text-right font-mono text-xs sm:text-sm text-neutral-400">
-            {priceError && currentPrice === null ? (
-              <span className="text-loss">Không lấy được giá</span>
-            ) : currentPrice !== null ? (
+            {currentPrice !== null ? (
               <>
-                <span className="text-neutral-200">
+                <span
+                  className={`transition-colors duration-500 ${
+                    priceFlash === "up"
+                      ? "text-profit"
+                      : priceFlash === "down"
+                        ? "text-loss"
+                        : "text-neutral-200"
+                  }`}
+                >
                   ${formatUsd(currentPrice)}
                 </span>
                 <div className="text-[10px] sm:text-xs text-neutral-500">
-                  cập nhật {priceUpdatedAt?.toLocaleTimeString("vi-VN")}
+                  {priceConnected ? "cập nhật" : "mất kết nối, đang thử lại..."}{" "}
+                  {priceUpdatedAt?.toLocaleTimeString("vi-VN")}
                 </div>
               </>
             ) : (
-              <span>Đang tải giá...</span>
+              <span>Đang kết nối giá...</span>
             )}
           </div>
         </header>
@@ -264,21 +246,26 @@ export default function Calculator() {
               Lịch sử ({history.length})
             </h2>
             <ul className="flex flex-col gap-1.5 font-mono text-xs sm:text-sm">
-              {history.map((item) => (
-                <li
-                  key={item.id}
-                  className="flex items-center justify-between gap-2 text-neutral-300"
-                >
-                  <span className="truncate">{item.command}</span>
-                  <span
-                    className={
-                      item.profitPercent >= 0 ? "text-profit" : "text-loss"
-                    }
+              {history.map((item) => {
+                const itemIsProfit = item.profitPercent >= 0;
+                const colorClass = itemIsProfit ? "text-profit" : "text-loss";
+                return (
+                  <li
+                    key={item.id}
+                    className="flex items-center justify-between gap-2 text-neutral-300"
                   >
-                    {formatPercent(item.profitPercent)}
-                  </span>
-                </li>
-              ))}
+                    <span className="truncate">{item.command}</span>
+                    <span className="flex items-baseline gap-2 shrink-0">
+                      <span className={colorClass}>
+                        {formatPercent(item.profitPercent)}
+                      </span>
+                      <span className={`${colorClass} opacity-70 text-[11px] sm:text-xs`}>
+                        {formatUsdSigned(item.profitUsd)}
+                      </span>
+                    </span>
+                  </li>
+                );
+              })}
             </ul>
           </div>
         )}

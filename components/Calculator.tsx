@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { calculate, parseCommand, type CalcResult } from "@/lib/calc";
+import PriceChart, { type PricePoint } from "./PriceChart";
 
 interface HistoryItem {
   id: string;
@@ -12,6 +13,7 @@ interface HistoryItem {
 const HISTORY_KEY = "btc-cal-history";
 const HISTORY_LIMIT = 10;
 const PRICE_REFRESH_MS = 45_000;
+const CHART_POINTS_LIMIT = 300;
 
 function formatUsd(n: number): string {
   return n.toLocaleString("en-US", {
@@ -40,6 +42,7 @@ export default function Calculator() {
   const [currentPrice, setCurrentPrice] = useState<number | null>(null);
   const [priceUpdatedAt, setPriceUpdatedAt] = useState<Date | null>(null);
   const [priceError, setPriceError] = useState(false);
+  const [priceHistory, setPriceHistory] = useState<PricePoint[]>([]);
   const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -50,6 +53,31 @@ export default function Calculator() {
       // ignore malformed localStorage data
     }
     inputRef.current?.focus();
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function fetchChartHistory() {
+      try {
+        const res = await fetch(
+          "https://api.coingecko.com/api/v3/coins/bitcoin/market_chart?vs_currency=usd&days=1"
+        );
+        if (!res.ok) throw new Error("bad response");
+        const data = await res.json();
+        const prices: [number, number][] = data?.prices ?? [];
+        if (!cancelled && prices.length > 0) {
+          setPriceHistory(prices.map(([t, p]) => ({ t, p })));
+        }
+      } catch {
+        // chart seed failed, live ticks will still populate it over time
+      }
+    }
+
+    fetchChartHistory();
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   useEffect(() => {
@@ -67,6 +95,12 @@ export default function Calculator() {
           setCurrentPrice(price);
           setPriceUpdatedAt(new Date());
           setPriceError(false);
+          setPriceHistory((prev) => {
+            const next = [...prev, { t: Date.now(), p: price }];
+            return next.length > CHART_POINTS_LIMIT
+              ? next.slice(next.length - CHART_POINTS_LIMIT)
+              : next;
+          });
         }
       } catch {
         if (!cancelled) setPriceError(true);
@@ -152,17 +186,17 @@ export default function Calculator() {
           </div>
         </header>
 
+        <div className="bg-panel border border-border rounded-xl p-3 sm:p-4">
+          <PriceChart points={priceHistory} />
+        </div>
+
         <div className="bg-panel border border-border rounded-xl p-4 sm:p-5 flex flex-col gap-3">
-          <label className="text-xs uppercase tracking-wide text-neutral-500 font-mono">
-            /cal &lt;giá_mua&gt; &lt;giá_bán&gt; &lt;số_tiền_usd&gt;
-          </label>
           <div className="flex flex-col sm:flex-row gap-2">
             <input
               ref={inputRef}
               value={input}
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={handleKeyDown}
-              placeholder="/cal 59500 63500 151"
               className="flex-1 bg-bg border border-border rounded-lg px-3 py-2.5 font-mono text-sm sm:text-base text-neutral-100 placeholder:text-neutral-600 outline-none focus:border-btc transition-colors"
             />
             <div className="flex gap-2">

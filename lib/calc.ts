@@ -15,10 +15,25 @@ export interface ParsedCommand {
   amountUsd: number;
 }
 
-export type CommandKind = "cal" | "profit";
+export type CommandKind = "cal" | "profit" | "goal" | "cleargoal";
 
 export function getCommandKind(input: string): CommandKind {
-  return /^\/?profit\b/i.test(input.trim()) ? "profit" : "cal";
+  const trimmed = input.trim();
+  if (/^\/?cleargoal\b/i.test(trimmed)) return "cleargoal";
+  if (/^\/?goal\b/i.test(trimmed)) return "goal";
+  if (/^\/?profit\b/i.test(trimmed)) return "profit";
+  return "cal";
+}
+
+export function parseGoalCommand(input: string): number {
+  const withoutPrefix = input.trim().replace(/^\/?goal\s+/i, "");
+  const point = Number(withoutPrefix.trim());
+
+  if (!isFinite(point) || isNaN(point) || point <= 0) {
+    throw new Error("Cú pháp không đúng. Dùng: /goal <mức_giá>");
+  }
+
+  return point;
 }
 
 export function parseCommand(input: string): ParsedCommand {

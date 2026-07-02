@@ -1,7 +1,13 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { calculate, getCommandKind, parseCommand, type CalcResult } from "@/lib/calc";
+import {
+  calculate,
+  getCommandKind,
+  parseCommand,
+  parseGoalCommand,
+  type CalcResult,
+} from "@/lib/calc";
 import { formatBtc, formatPercent, formatUsd, formatUsdSigned } from "@/lib/format";
 import { useLivePrice } from "@/lib/useLivePrice";
 import PriceChart, { type PricePoint } from "./PriceChart";
@@ -17,6 +23,7 @@ interface HistoryItem {
 const HISTORY_KEY = "btc-cal-history";
 const HISTORY_LIMIT = 10;
 const PROFIT_BOOK_KEY = "btc-profit-book";
+const GOAL_KEY = "btc-goal-price";
 const CHART_APPEND_MS = 30_000;
 const CHART_POINTS_LIMIT = 300;
 
@@ -27,6 +34,7 @@ export default function Calculator() {
   const [history, setHistory] = useState<HistoryItem[]>([]);
   const [profitBook, setProfitBook] = useState<ProfitEntry[]>([]);
   const [priceHistory, setPriceHistory] = useState<PricePoint[]>([]);
+  const [goalPrice, setGoalPrice] = useState<number | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const {
     price: currentPrice,
@@ -53,6 +61,15 @@ export default function Calculator() {
     try {
       const storedProfit = window.localStorage.getItem(PROFIT_BOOK_KEY);
       if (storedProfit) setProfitBook(JSON.parse(storedProfit));
+    } catch {
+      // ignore malformed localStorage data
+    }
+    try {
+      const storedGoal = window.localStorage.getItem(GOAL_KEY);
+      if (storedGoal) {
+        const parsedGoal = Number(storedGoal);
+        if (isFinite(parsedGoal) && parsedGoal > 0) setGoalPrice(parsedGoal);
+      }
     } catch {
       // ignore malformed localStorage data
     }
@@ -116,15 +133,47 @@ export default function Calculator() {
     }
   }
 
+  function saveGoal(next: number | null) {
+    setGoalPrice(next);
+    try {
+      if (next === null) {
+        window.localStorage.removeItem(GOAL_KEY);
+      } else {
+        window.localStorage.setItem(GOAL_KEY, String(next));
+      }
+    } catch {
+      // localStorage unavailable, skip persisting
+    }
+  }
+
   function handleSubmit() {
     if (!input.trim()) return;
+    const kind = getCommandKind(input);
+
+    if (kind === "cleargoal") {
+      saveGoal(null);
+      setError(null);
+      return;
+    }
+
+    if (kind === "goal") {
+      try {
+        const point = parseGoalCommand(input);
+        saveGoal(point);
+        setError(null);
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "Lỗi không xác định.");
+      }
+      return;
+    }
+
     try {
       const parsed = parseCommand(input);
       const calcResult = calculate(parsed);
       setResult(calcResult);
       setError(null);
 
-      if (getCommandKind(input) === "profit") {
+      if (kind === "profit") {
         const entry: ProfitEntry = {
           id: `${Date.now()}`,
           entry: parsed.buyPrice,
@@ -165,6 +214,7 @@ export default function Calculator() {
   function useCurrentPriceAsSell() {
     if (currentPrice === null) return;
     const kind = getCommandKind(input);
+    if (kind === "goal" || kind === "cleargoal") return;
     const withoutPrefix = input.trim().replace(/^\/?(cal|profit)\s*/i, "");
     const parts = withoutPrefix.split(/\s+/).filter(Boolean);
     const buy = parts[0] ?? "";
@@ -175,6 +225,13 @@ export default function Calculator() {
   }
 
   const isProfit = result !== null && result.profitPercent >= 0;
+
+  const goalReached =
+    goalPrice !== null && currentPrice !== null && currentPrice >= goalPrice;
+  const goalDistancePercent =
+    goalPrice !== null && currentPrice !== null
+      ? ((goalPrice - currentPrice) / currentPrice) * 100
+      : null;
 
   return (
     <div className="min-h-screen flex flex-col items-center px-4 py-6 sm:py-10">
@@ -208,6 +265,18 @@ export default function Calculator() {
                   {priceConnected ? "cập nhật" : "mất kết nối, đang thử lại..."}{" "}
                   {priceUpdatedAt?.toLocaleTimeString("vi-VN")}
                 </div>
+                {goalPrice !== null && goalDistancePercent !== null && (
+                  <div
+                    className={`text-[10px] sm:text-xs ${
+                      goalReached ? "text-profit" : "text-btc"
+                    }`}
+                  >
+                    🎯 ${formatUsd(goalPrice)}{" "}
+                    {goalReached
+                      ? "— đã đạt!"
+                      : `— còn ${formatPercent(goalDistancePercent)}`}
+                  </div>
+                )}
               </>
             ) : (
               <span>Đang kết nối giá...</span>
@@ -216,7 +285,7 @@ export default function Calculator() {
         </header>
 
         <div className="bg-panel border border-border rounded-xl p-3 sm:p-4">
-          <PriceChart points={priceHistory} />
+          <PriceChart points={priceHistory} goal={goalPrice} currentPrice={currentPrice} />
         </div>
 
         <div className="bg-panel border border-border rounded-xl p-4 sm:p-5 flex flex-col gap-3">

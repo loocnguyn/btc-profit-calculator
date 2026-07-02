@@ -12,27 +12,44 @@ const WIDTH = 600;
 const HEIGHT = 120;
 const PADDING = 8;
 
-export default function PriceChart({ points }: { points: PricePoint[] }) {
+export default function PriceChart({
+  points,
+  goal = null,
+  currentPrice = null,
+}: {
+  points: PricePoint[];
+  goal?: number | null;
+  currentPrice?: number | null;
+}) {
   const gradientId = useId();
   const [hoverIndex, setHoverIndex] = useState<number | null>(null);
 
-  const { linePath, areaPath, coords, isUp } = useMemo(() => {
+  const { linePath, areaPath, coords, isUp, goalY } = useMemo(() => {
     if (points.length < 2) {
-      return { linePath: "", areaPath: "", coords: [] as [number, number][], isUp: true };
+      return {
+        linePath: "",
+        areaPath: "",
+        coords: [] as [number, number][],
+        isUp: true,
+        goalY: null as number | null,
+      };
     }
 
     const prices = points.map((pt) => pt.p);
-    const min = Math.min(...prices);
-    const max = Math.max(...prices);
+    let min = Math.min(...prices);
+    let max = Math.max(...prices);
+    if (goal !== null) {
+      min = Math.min(min, goal);
+      max = Math.max(max, goal);
+    }
     const range = max - min || max * 0.001 || 1;
+
+    const toY = (price: number) =>
+      HEIGHT - PADDING - ((price - min) / range) * (HEIGHT - PADDING * 2);
 
     const coords = points.map((pt, i) => {
       const x = (i / (points.length - 1)) * WIDTH;
-      const y =
-        HEIGHT -
-        PADDING -
-        ((pt.p - min) / range) * (HEIGHT - PADDING * 2);
-      return [x, y] as [number, number];
+      return [x, toY(pt.p)] as [number, number];
     });
 
     const line = coords
@@ -46,8 +63,9 @@ export default function PriceChart({ points }: { points: PricePoint[] }) {
       areaPath: area,
       coords,
       isUp: prices[prices.length - 1] >= prices[0],
+      goalY: goal !== null ? toY(goal) : null,
     };
-  }, [points]);
+  }, [points, goal]);
 
   if (points.length < 2) {
     return (
@@ -58,6 +76,8 @@ export default function PriceChart({ points }: { points: PricePoint[] }) {
   }
 
   const color = isUp ? "#3ddc84" : "#ff4d4f";
+  const goalReached = goal !== null && currentPrice !== null && currentPrice >= goal;
+  const goalColor = goalReached ? "#3ddc84" : "#f7931a";
 
   function handleMouseMove(e: MouseEvent<HTMLDivElement>) {
     const rect = e.currentTarget.getBoundingClientRect();
@@ -94,6 +114,31 @@ export default function PriceChart({ points }: { points: PricePoint[] }) {
           strokeWidth={2}
           vectorEffect="non-scaling-stroke"
         />
+        {goalY !== null && (
+          <>
+            <line
+              x1={0}
+              y1={goalY}
+              x2={WIDTH}
+              y2={goalY}
+              stroke={goalColor}
+              strokeWidth={1.5}
+              strokeDasharray="6 5"
+              vectorEffect="non-scaling-stroke"
+            />
+            <text
+              x={WIDTH - 4}
+              y={Math.min(Math.max(goalY - 6, 10), HEIGHT - 4)}
+              textAnchor="end"
+              fontSize={11}
+              fontFamily="ui-monospace, monospace"
+              fill={goalColor}
+            >
+              {goalReached ? "🎯 Đã đạt " : "🎯 "}
+              {formatUsd(goal as number)}
+            </text>
+          </>
+        )}
         {hoveredCoord && (
           <>
             <line

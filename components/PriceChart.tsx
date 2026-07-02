@@ -114,31 +114,50 @@ export default function PriceChart({
           strokeWidth={2}
           vectorEffect="non-scaling-stroke"
         />
-        {goalY !== null && (
-          <>
-            <line
-              x1={0}
-              y1={goalY}
-              x2={WIDTH}
-              y2={goalY}
-              stroke={goalColor}
-              strokeWidth={1.5}
-              strokeDasharray="6 5"
-              vectorEffect="non-scaling-stroke"
-            />
-            <text
-              x={WIDTH - 4}
-              y={Math.min(Math.max(goalY - 6, 10), HEIGHT - 4)}
-              textAnchor="end"
-              fontSize={11}
-              fontFamily="ui-monospace, monospace"
-              fill={goalColor}
-            >
-              {goalReached ? "Đã đạt Goal " : "Goal "}
-              {formatUsd(goal as number)}
-            </text>
-          </>
-        )}
+        {goalY !== null && (() => {
+          const labelText = `${goalReached ? "Đã đạt · " : "Goal "}$${formatUsd(goal as number)}`;
+          const labelWidth = labelText.length * 6.4 + 12;
+          const labelHeight = 16;
+          const hasRoomAbove = goalY - PADDING > labelHeight + 4;
+          const labelCenterY = hasRoomAbove ? goalY - 14 : goalY + 14;
+          const rectX = WIDTH - labelWidth - 6;
+
+          return (
+            <>
+              <line
+                x1={0}
+                y1={goalY}
+                x2={WIDTH}
+                y2={goalY}
+                stroke={goalColor}
+                strokeWidth={1.5}
+                strokeDasharray="6 5"
+                vectorEffect="non-scaling-stroke"
+              />
+              <rect
+                x={rectX}
+                y={labelCenterY - labelHeight / 2}
+                width={labelWidth}
+                height={labelHeight}
+                rx={4}
+                fill="#0b0e14"
+                fillOpacity={0.9}
+                stroke={goalColor}
+                strokeOpacity={0.4}
+              />
+              <text
+                x={WIDTH - 12}
+                y={labelCenterY + 4}
+                textAnchor="end"
+                fontSize={11}
+                fontFamily="ui-monospace, monospace"
+                fill={goalColor}
+              >
+                {labelText}
+              </text>
+            </>
+          );
+        })()}
         {hoveredCoord && (
           <>
             <line

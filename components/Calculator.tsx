@@ -12,6 +12,7 @@ import { formatBtc, formatPercent, formatUsd, formatUsdSigned } from "@/lib/form
 import { useLivePrice } from "@/lib/useLivePrice";
 import PriceChart, { type PricePoint } from "./PriceChart";
 import ProfitPanel, { type ProfitEntry } from "./ProfitPanel";
+import CommandHelp from "./CommandHelp";
 
 interface HistoryItem {
   id: string;
@@ -236,11 +237,14 @@ export default function Calculator() {
   return (
     <div className="min-h-screen flex flex-col items-center px-4 py-6 sm:py-10">
       <div className="w-full max-w-5xl flex flex-col lg:grid lg:grid-cols-[300px_minmax(0,1fr)] gap-5 lg:items-start">
-        <ProfitPanel
-          entries={profitBook}
-          onRemove={removeProfitEntry}
-          onClearAll={clearProfitBook}
-        />
+        <div className="flex flex-col gap-5 lg:sticky lg:top-6">
+          <CommandHelp />
+          <ProfitPanel
+            entries={profitBook}
+            onRemove={removeProfitEntry}
+            onClearAll={clearProfitBook}
+          />
+        </div>
 
         <div className="flex flex-col gap-5">
         <header className="flex items-center justify-between">

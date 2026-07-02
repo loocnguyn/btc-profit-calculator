@@ -27,7 +27,7 @@ export default function ProfitPanel({
   const isProfit = totalProfit >= 0;
 
   return (
-    <div className="bg-panel border border-border rounded-xl p-4 sm:p-5 flex flex-col gap-4 lg:sticky lg:top-6">
+    <div className="bg-panel border border-border rounded-xl p-4 sm:p-5 flex flex-col gap-4">
       <div>
         <div className="text-xs uppercase tracking-wide text-neutral-500 font-mono mb-1">
           Total Profit
@@ -64,11 +64,7 @@ export default function ProfitPanel({
         )}
       </div>
 
-      {entries.length === 0 ? (
-        <p className="text-xs sm:text-sm text-neutral-600 font-mono">
-          Gõ /profit &lt;entry&gt; &lt;sell&gt; &lt;vốn&gt; để ghi nhận khoản lãi đầu tiên.
-        </p>
-      ) : (
+      {entries.length > 0 && (
         <ul className="flex flex-col gap-2 max-h-[420px] overflow-y-auto">
           {entries.map((e) => {
             const rowIsProfit = e.profitUsd >= 0;

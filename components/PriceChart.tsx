@@ -134,7 +134,7 @@ export default function PriceChart({
               fontFamily="ui-monospace, monospace"
               fill={goalColor}
             >
-              {goalReached ? "🎯 Đã đạt " : "🎯 "}
+              {goalReached ? "Đã đạt Goal " : "Goal "}
               {formatUsd(goal as number)}
             </text>
           </>

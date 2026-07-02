@@ -271,7 +271,7 @@ export default function Calculator() {
                       goalReached ? "text-profit" : "text-btc"
                     }`}
                   >
-                    🎯 ${formatUsd(goalPrice)}{" "}
+                    Goal ${formatUsd(goalPrice)}{" "}
                     {goalReached
                       ? "— đã đạt!"
                       : `— còn ${formatPercent(goalDistancePercent)}`}

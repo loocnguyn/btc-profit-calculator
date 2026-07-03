@@ -5,11 +5,19 @@ import {
   calculate,
   getCommandKind,
   parseCommand,
+  parseEntryCommand,
   parseGoalCommand,
   type CalcResult,
 } from "@/lib/calc";
 import { formatBtc, formatPercent, formatUsd, formatUsdSigned } from "@/lib/format";
 import { useLivePrice } from "@/lib/useLivePrice";
+import {
+  clearProfitEntries,
+  deleteProfitEntry,
+  fetchProfitEntries,
+  insertProfitEntry,
+  supabaseEnabled,
+} from "@/lib/supabase";
 import PriceChart, { type PricePoint } from "./PriceChart";
 import ProfitPanel, { type ProfitEntry } from "./ProfitPanel";
 import CommandHelp from "./CommandHelp";
@@ -25,6 +33,7 @@ const HISTORY_KEY = "btc-cal-history";
 const HISTORY_LIMIT = 10;
 const PROFIT_BOOK_KEY = "btc-profit-book";
 const GOAL_KEY = "btc-goal-price";
+const ENTRY_KEY = "btc-entry-price";
 const CHART_APPEND_MS = 30_000;
 const CHART_POINTS_LIMIT = 300;
 
@@ -36,6 +45,7 @@ export default function Calculator() {
   const [profitBook, setProfitBook] = useState<ProfitEntry[]>([]);
   const [priceHistory, setPriceHistory] = useState<PricePoint[]>([]);
   const [goalPrice, setGoalPrice] = useState<number | null>(null);
+  const [entryPrice, setEntryPrice] = useState<number | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const {
     price: currentPrice,
@@ -44,6 +54,14 @@ export default function Calculator() {
     flash: priceFlash,
   } = useLivePrice();
   const currentPriceRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    if (currentPrice === null) return;
+    document.title = `$${formatUsd(currentPrice)} · BTC`;
+    return () => {
+      document.title = "Máy tính lợi nhuận BTC";
+    };
+  }, [currentPrice]);
 
   useEffect(() => {
     currentPriceRef.current = currentPrice;
@@ -74,7 +92,29 @@ export default function Calculator() {
     } catch {
       // ignore malformed localStorage data
     }
+    try {
+      const storedEntry = window.localStorage.getItem(ENTRY_KEY);
+      if (storedEntry) {
+        const parsedEntry = Number(storedEntry);
+        if (isFinite(parsedEntry) && parsedEntry > 0) setEntryPrice(parsedEntry);
+      }
+    } catch {
+      // ignore malformed localStorage data
+    }
     inputRef.current?.focus();
+
+    if (supabaseEnabled) {
+      fetchProfitEntries().then((entries) => {
+        if (entries !== null) {
+          setProfitBook(entries);
+          try {
+            window.localStorage.setItem(PROFIT_BOOK_KEY, JSON.stringify(entries));
+          } catch {
+            // localStorage unavailable, skip caching
+          }
+        }
+      });
+    }
   }, []);
 
   useEffect(() => {
@@ -147,6 +187,19 @@ export default function Calculator() {
     }
   }
 
+  function saveEntry(next: number | null) {
+    setEntryPrice(next);
+    try {
+      if (next === null) {
+        window.localStorage.removeItem(ENTRY_KEY);
+      } else {
+        window.localStorage.setItem(ENTRY_KEY, String(next));
+      }
+    } catch {
+      // localStorage unavailable, skip persisting
+    }
+  }
+
   function handleSubmit() {
     if (!input.trim()) return;
     const kind = getCommandKind(input);
@@ -161,6 +214,23 @@ export default function Calculator() {
       try {
         const point = parseGoalCommand(input);
         saveGoal(point);
+        setError(null);
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "Lỗi không xác định.");
+      }
+      return;
+    }
+
+    if (kind === "clearentry") {
+      saveEntry(null);
+      setError(null);
+      return;
+    }
+
+    if (kind === "entry") {
+      try {
+        const point = parseEntryCommand(input);
+        saveEntry(point);
         setError(null);
       } catch (err) {
         setError(err instanceof Error ? err.message : "Lỗi không xác định.");
@@ -185,6 +255,7 @@ export default function Calculator() {
           timestamp: Date.now(),
         };
         saveProfitBook([entry, ...profitBook]);
+        insertProfitEntry(entry);
       } else {
         const item: HistoryItem = {
           id: `${Date.now()}`,
@@ -202,10 +273,12 @@ export default function Calculator() {
 
   function removeProfitEntry(id: string) {
     saveProfitBook(profitBook.filter((e) => e.id !== id));
+    deleteProfitEntry(id);
   }
 
   function clearProfitBook() {
     saveProfitBook([]);
+    clearProfitEntries();
   }
 
   function handleKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
@@ -213,13 +286,24 @@ export default function Calculator() {
   }
 
   function useCurrentPriceAsSell() {
-    if (currentPrice === null) return;
     const kind = getCommandKind(input);
-    if (kind === "goal" || kind === "cleargoal") return;
+    if (kind === "goal" || kind === "cleargoal" || kind === "entry" || kind === "clearentry") {
+      return;
+    }
     const withoutPrefix = input.trim().replace(/^\/?(cal|profit)\s*/i, "");
     const parts = withoutPrefix.split(/\s+/).filter(Boolean);
-    const buy = parts[0] ?? "";
     const amount = parts[2] ?? "";
+
+    if (entryPrice !== null) {
+      // An /entry line exists: only fill the entry param, leave sell untouched.
+      const sell = parts[1] ?? "";
+      setInput(`/${kind} ${entryPrice.toFixed(2)} ${sell} ${amount}`.trim());
+      inputRef.current?.focus();
+      return;
+    }
+
+    if (currentPrice === null) return;
+    const buy = parts[0] ?? "";
     const sell = currentPrice.toFixed(2);
     setInput(`/${kind} ${buy} ${sell} ${amount}`.trim());
     inputRef.current?.focus();
@@ -232,6 +316,10 @@ export default function Calculator() {
   const goalDistancePercent =
     goalPrice !== null && currentPrice !== null
       ? ((goalPrice - currentPrice) / currentPrice) * 100
+      : null;
+  const entryPnlPercent =
+    entryPrice !== null && currentPrice !== null
+      ? ((currentPrice - entryPrice) / entryPrice) * 100
       : null;
 
   return (
@@ -249,7 +337,7 @@ export default function Calculator() {
         <div className="flex flex-col gap-5">
         <header className="flex items-center justify-between">
           <h1 className="text-lg sm:text-xl font-bold tracking-tight">
-            <span className="text-btc">₿</span> BTC Profit Calculator
+            <span className="text-btc">₿</span> Máy tính lợi nhuận BTC
           </h1>
           <div className="text-right font-mono text-xs sm:text-sm text-neutral-400">
             {currentPrice !== null ? (
@@ -275,10 +363,19 @@ export default function Calculator() {
                       goalReached ? "text-profit" : "text-btc"
                     }`}
                   >
-                    Goal ${formatUsd(goalPrice)}{" "}
+                    Mục tiêu ${formatUsd(goalPrice)}{" "}
                     {goalReached
                       ? "— đã đạt!"
                       : `— còn ${formatPercent(goalDistancePercent)}`}
+                  </div>
+                )}
+                {entryPrice !== null && entryPnlPercent !== null && (
+                  <div
+                    className={`text-[10px] sm:text-xs ${
+                      entryPnlPercent >= 0 ? "text-profit" : "text-loss"
+                    }`}
+                  >
+                    Vào lệnh ${formatUsd(entryPrice)} — {formatPercent(entryPnlPercent)}
                   </div>
                 )}
               </>
@@ -289,7 +386,12 @@ export default function Calculator() {
         </header>
 
         <div className="bg-panel border border-border rounded-xl p-3 sm:p-4">
-          <PriceChart points={priceHistory} goal={goalPrice} currentPrice={currentPrice} />
+          <PriceChart
+            points={priceHistory}
+            goal={goalPrice}
+            entry={entryPrice}
+            currentPrice={currentPrice}
+          />
         </div>
 
         <div className="bg-panel border border-border rounded-xl p-4 sm:p-5 flex flex-col gap-3">
@@ -304,7 +406,7 @@ export default function Calculator() {
             <div className="flex gap-2">
               <button
                 onClick={useCurrentPriceAsSell}
-                disabled={currentPrice === null}
+                disabled={currentPrice === null && entryPrice === null}
                 className="whitespace-nowrap px-3 py-2.5 rounded-lg border border-border text-xs sm:text-sm font-mono text-neutral-300 hover:border-btc hover:text-btc transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
               >
                 Dùng giá hiện tại

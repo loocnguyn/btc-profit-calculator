@@ -30,7 +30,7 @@ export default function ProfitPanel({
     <div className="bg-panel border border-border rounded-xl p-4 sm:p-5 flex flex-col gap-4">
       <div>
         <div className="text-xs uppercase tracking-wide text-neutral-500 font-mono mb-1">
-          Total Profit
+          Tổng lợi nhuận
         </div>
         <div
           className={`text-3xl sm:text-4xl font-bold font-mono ${

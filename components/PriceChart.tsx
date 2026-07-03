@@ -11,20 +11,79 @@ export interface PricePoint {
 const WIDTH = 600;
 const HEIGHT = 120;
 const PADDING = 8;
+const LABEL_HEIGHT = 16;
+
+/** A dashed horizontal price line with a labelled pill offset off the line. */
+function ChartPriceLine({
+  y,
+  color,
+  text,
+  preferBelow = false,
+}: {
+  y: number;
+  color: string;
+  text: string;
+  preferBelow?: boolean;
+}) {
+  const labelWidth = text.length * 6.4 + 12;
+  const roomAbove = y - PADDING > LABEL_HEIGHT + 4;
+  const roomBelow = HEIGHT - PADDING - y > LABEL_HEIGHT + 4;
+  const below = preferBelow ? roomBelow || !roomAbove : !roomAbove && roomBelow;
+  const labelCenterY = below ? y + 14 : y - 14;
+  const rectX = WIDTH - labelWidth - 6;
+
+  return (
+    <>
+      <line
+        x1={0}
+        y1={y}
+        x2={WIDTH}
+        y2={y}
+        stroke={color}
+        strokeWidth={1.5}
+        strokeDasharray="6 5"
+        vectorEffect="non-scaling-stroke"
+      />
+      <rect
+        x={rectX}
+        y={labelCenterY - LABEL_HEIGHT / 2}
+        width={labelWidth}
+        height={LABEL_HEIGHT}
+        rx={4}
+        fill="#0b0e14"
+        fillOpacity={0.9}
+        stroke={color}
+        strokeOpacity={0.4}
+      />
+      <text
+        x={WIDTH - 12}
+        y={labelCenterY + 4}
+        textAnchor="end"
+        fontSize={11}
+        fontFamily="ui-monospace, monospace"
+        fill={color}
+      >
+        {text}
+      </text>
+    </>
+  );
+}
 
 export default function PriceChart({
   points,
   goal = null,
+  entry = null,
   currentPrice = null,
 }: {
   points: PricePoint[];
   goal?: number | null;
+  entry?: number | null;
   currentPrice?: number | null;
 }) {
   const gradientId = useId();
   const [hoverIndex, setHoverIndex] = useState<number | null>(null);
 
-  const { linePath, areaPath, coords, isUp, goalY } = useMemo(() => {
+  const { linePath, areaPath, coords, isUp, goalY, entryY } = useMemo(() => {
     if (points.length < 2) {
       return {
         linePath: "",
@@ -32,15 +91,18 @@ export default function PriceChart({
         coords: [] as [number, number][],
         isUp: true,
         goalY: null as number | null,
+        entryY: null as number | null,
       };
     }
 
     const prices = points.map((pt) => pt.p);
     let min = Math.min(...prices);
     let max = Math.max(...prices);
-    if (goal !== null) {
-      min = Math.min(min, goal);
-      max = Math.max(max, goal);
+    for (const extra of [goal, entry]) {
+      if (extra !== null) {
+        min = Math.min(min, extra);
+        max = Math.max(max, extra);
+      }
     }
     const range = max - min || max * 0.001 || 1;
 
@@ -64,8 +126,9 @@ export default function PriceChart({
       coords,
       isUp: prices[prices.length - 1] >= prices[0],
       goalY: goal !== null ? toY(goal) : null,
+      entryY: entry !== null ? toY(entry) : null,
     };
-  }, [points, goal]);
+  }, [points, goal, entry]);
 
   if (points.length < 2) {
     return (
@@ -78,6 +141,7 @@ export default function PriceChart({
   const color = isUp ? "#3ddc84" : "#ff4d4f";
   const goalReached = goal !== null && currentPrice !== null && currentPrice >= goal;
   const goalColor = goalReached ? "#3ddc84" : "#f7931a";
+  const entryColor = "#38bdf8";
 
   function handleMouseMove(e: MouseEvent<HTMLDivElement>) {
     const rect = e.currentTarget.getBoundingClientRect();
@@ -114,50 +178,21 @@ export default function PriceChart({
           strokeWidth={2}
           vectorEffect="non-scaling-stroke"
         />
-        {goalY !== null && (() => {
-          const labelText = `${goalReached ? "Đã đạt · " : "Goal "}$${formatUsd(goal as number)}`;
-          const labelWidth = labelText.length * 6.4 + 12;
-          const labelHeight = 16;
-          const hasRoomAbove = goalY - PADDING > labelHeight + 4;
-          const labelCenterY = hasRoomAbove ? goalY - 14 : goalY + 14;
-          const rectX = WIDTH - labelWidth - 6;
-
-          return (
-            <>
-              <line
-                x1={0}
-                y1={goalY}
-                x2={WIDTH}
-                y2={goalY}
-                stroke={goalColor}
-                strokeWidth={1.5}
-                strokeDasharray="6 5"
-                vectorEffect="non-scaling-stroke"
-              />
-              <rect
-                x={rectX}
-                y={labelCenterY - labelHeight / 2}
-                width={labelWidth}
-                height={labelHeight}
-                rx={4}
-                fill="#0b0e14"
-                fillOpacity={0.9}
-                stroke={goalColor}
-                strokeOpacity={0.4}
-              />
-              <text
-                x={WIDTH - 12}
-                y={labelCenterY + 4}
-                textAnchor="end"
-                fontSize={11}
-                fontFamily="ui-monospace, monospace"
-                fill={goalColor}
-              >
-                {labelText}
-              </text>
-            </>
-          );
-        })()}
+        {entryY !== null && (
+          <ChartPriceLine
+            y={entryY}
+            color={entryColor}
+            text={`Vào $${formatUsd(entry as number)}`}
+            preferBelow
+          />
+        )}
+        {goalY !== null && (
+          <ChartPriceLine
+            y={goalY}
+            color={goalColor}
+            text={`${goalReached ? "Đã đạt · " : "Mục tiêu "}$${formatUsd(goal as number)}`}
+          />
+        )}
         {hoveredCoord && (
           <>
             <line

@@ -15,25 +15,43 @@ export interface ParsedCommand {
   amountUsd: number;
 }
 
-export type CommandKind = "cal" | "profit" | "goal" | "cleargoal";
+export type CommandKind =
+  | "cal"
+  | "profit"
+  | "goal"
+  | "cleargoal"
+  | "entry"
+  | "clearentry";
 
 export function getCommandKind(input: string): CommandKind {
   const trimmed = input.trim();
   if (/^\/?cleargoal\b/i.test(trimmed)) return "cleargoal";
   if (/^\/?goal\b/i.test(trimmed)) return "goal";
+  if (/^\/?clearentry\b/i.test(trimmed)) return "clearentry";
+  if (/^\/?entry\b/i.test(trimmed)) return "entry";
   if (/^\/?profit\b/i.test(trimmed)) return "profit";
   return "cal";
 }
 
-export function parseGoalCommand(input: string): number {
-  const withoutPrefix = input.trim().replace(/^\/?goal\s+/i, "");
-  const point = Number(withoutPrefix.trim());
+/** Parse a single positive price argument for /goal or /entry. */
+export function parsePriceArg(input: string, cmd: "goal" | "entry"): number {
+  const prefix = cmd === "goal" ? /^\/?goal\s+/i : /^\/?entry\s+/i;
+  const point = Number(input.trim().replace(prefix, "").trim());
 
   if (!isFinite(point) || isNaN(point) || point <= 0) {
-    throw new Error("Cú pháp không đúng. Dùng: /goal <mức_giá>");
+    const usage = cmd === "goal" ? "/goal <mức_giá>" : "/entry <giá_vào>";
+    throw new Error(`Cú pháp không đúng. Dùng: ${usage}`);
   }
 
   return point;
+}
+
+export function parseGoalCommand(input: string): number {
+  return parsePriceArg(input, "goal");
+}
+
+export function parseEntryCommand(input: string): number {
+  return parsePriceArg(input, "entry");
 }
 
 export function parseCommand(input: string): ParsedCommand {

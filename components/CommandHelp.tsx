@@ -9,7 +9,7 @@ const COMMANDS = [
   },
   {
     syntax: "/profit <entry> <sell> <vốn>",
-    desc: "Ghi nhận khoản lãi vào Total Profit",
+    desc: "Ghi nhận khoản lãi vào Tổng lợi nhuận",
   },
   {
     syntax: "/goal <giá>",
@@ -19,10 +19,18 @@ const COMMANDS = [
     syntax: "/cleargoal",
     desc: "Xoá đường mục tiêu",
   },
+  {
+    syntax: "/entry <giá>",
+    desc: "Vẽ đường giá vào lệnh lên chart",
+  },
+  {
+    syntax: "/clearentry",
+    desc: "Xoá đường giá vào lệnh",
+  },
 ];
 
 export default function CommandHelp() {
-  const [open, setOpen] = useState(true);
+  const [open, setOpen] = useState(false);
 
   return (
     <div className="bg-panel border border-border rounded-xl p-4 sm:p-5">

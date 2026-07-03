@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "BTC Profit Calculator",
+  title: "Máy tính lợi nhuận BTC",
   description: "Tính nhanh lợi nhuận mua bán BTC bằng lệnh text.",
 };
 

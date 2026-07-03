@@ -4,28 +4,28 @@ import { useState } from "react";
 
 const COMMANDS = [
   {
-    syntax: "/cal <entry> <sell> <vốn>",
-    desc: "Tính nhanh lãi, hiện ở Lịch sử",
+    syntax: "/cal <entry> <sell> <money>",
+    desc: "Quick profit calc, shown in History",
   },
   {
-    syntax: "/profit <entry> <sell> <vốn>",
-    desc: "Ghi nhận khoản lãi vào Tổng lợi nhuận",
+    syntax: "/profit <entry> <sell> <money>",
+    desc: "Records profit into Total Profit",
   },
   {
-    syntax: "/goal <giá>",
-    desc: "Vẽ đường mục tiêu take-profit lên chart",
+    syntax: "/goal <price>",
+    desc: "Draws a take-profit target line on the chart",
   },
   {
     syntax: "/cleargoal",
-    desc: "Xoá đường mục tiêu",
+    desc: "Removes the target line",
   },
   {
-    syntax: "/entry <giá>",
-    desc: "Vẽ đường giá vào lệnh lên chart",
+    syntax: "/entry <price>",
+    desc: "Draws an entry price line on the chart",
   },
   {
     syntax: "/clearentry",
-    desc: "Xoá đường giá vào lệnh",
+    desc: "Removes the entry line",
   },
 ];
 
@@ -38,7 +38,7 @@ export default function CommandHelp() {
         onClick={() => setOpen((v) => !v)}
         className="w-full flex items-center justify-between text-xs uppercase tracking-wide text-neutral-500 font-mono"
       >
-        <span>Lệnh</span>
+        <span>Commands</span>
         <span className="text-neutral-600">{open ? "▲" : "▼"}</span>
       </button>
 

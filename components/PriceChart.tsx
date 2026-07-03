@@ -133,7 +133,7 @@ export default function PriceChart({
   if (points.length < 2) {
     return (
       <div className="h-[120px] flex items-center justify-center text-xs sm:text-sm text-neutral-500 font-mono">
-        Đang tải biểu đồ giá...
+        Loading price chart...
       </div>
     );
   }
@@ -182,7 +182,7 @@ export default function PriceChart({
           <ChartPriceLine
             y={entryY}
             color={entryColor}
-            text={`Vào $${formatUsd(entry as number)}`}
+            text={`Entry $${formatUsd(entry as number)}`}
             preferBelow
           />
         )}
@@ -190,7 +190,7 @@ export default function PriceChart({
           <ChartPriceLine
             y={goalY}
             color={goalColor}
-            text={`${goalReached ? "Đã đạt · " : "Mục tiêu "}$${formatUsd(goal as number)}`}
+            text={`${goalReached ? "Reached · " : "Target "}$${formatUsd(goal as number)}`}
           />
         )}
         {hoveredCoord && (
@@ -227,7 +227,7 @@ export default function PriceChart({
         >
           <div className="text-neutral-100">${formatUsd(hovered.p)}</div>
           <div className="text-neutral-500">
-            {new Date(hovered.t).toLocaleTimeString("vi-VN")}
+            {new Date(hovered.t).toLocaleTimeString("en-US")}
           </div>
         </div>
       )}

@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import type { Session } from "@supabase/supabase-js";
 import {
   calculate,
   getCommandKind,
@@ -8,40 +9,39 @@ import {
   parseEntryCommand,
   parseGoalCommand,
   type CalcResult,
+  type CommandKind,
 } from "@/lib/calc";
 import { formatBtc, formatPercent, formatUsd, formatUsdSigned } from "@/lib/format";
 import { useLivePrice } from "@/lib/useLivePrice";
 import {
   clearProfitEntries,
   deleteProfitEntry,
+  fetchCommandHistory,
+  fetchPriceMarks,
   fetchProfitEntries,
+  insertCommandHistoryItem,
   insertProfitEntry,
-  supabaseEnabled,
+  signOutUser,
+  upsertPriceMarks,
+  type CommandHistoryItem,
 } from "@/lib/supabase";
 import PriceChart, { type PricePoint } from "./PriceChart";
 import ProfitPanel, { type ProfitEntry } from "./ProfitPanel";
 import CommandHelp from "./CommandHelp";
 
-interface HistoryItem {
-  id: string;
-  command: string;
-  profitPercent: number;
-  profitUsd: number;
-}
-
-const HISTORY_KEY = "btc-cal-history";
 const HISTORY_LIMIT = 10;
-const PROFIT_BOOK_KEY = "btc-profit-book";
-const GOAL_KEY = "btc-goal-price";
-const ENTRY_KEY = "btc-entry-price";
 const CHART_APPEND_MS = 30_000;
 const CHART_POINTS_LIMIT = 300;
 
-export default function Calculator() {
+export default function Calculator({ session }: { session: Session }) {
+  const userId = session.user.id;
+  const username = (session.user.user_metadata?.username as string | undefined) ?? "user";
+
   const [input, setInput] = useState("");
   const [result, setResult] = useState<CalcResult | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [history, setHistory] = useState<HistoryItem[]>([]);
+  const [history, setHistory] = useState<CommandHistoryItem[]>([]);
+  const [historyOpen, setHistoryOpen] = useState(false);
   const [profitBook, setProfitBook] = useState<ProfitEntry[]>([]);
   const [priceHistory, setPriceHistory] = useState<PricePoint[]>([]);
   const [goalPrice, setGoalPrice] = useState<number | null>(null);
@@ -54,12 +54,14 @@ export default function Calculator() {
     flash: priceFlash,
   } = useLivePrice();
   const currentPriceRef = useRef<number | null>(null);
+  const goalPriceRef = useRef<number | null>(null);
+  const entryPriceRef = useRef<number | null>(null);
 
   useEffect(() => {
     if (currentPrice === null) return;
     document.title = `$${formatUsd(currentPrice)} · BTC`;
     return () => {
-      document.title = "Máy tính lợi nhuận BTC";
+      document.title = "BTC Profit Calculator";
     };
   }, [currentPrice]);
 
@@ -68,53 +70,26 @@ export default function Calculator() {
   }, [currentPrice]);
 
   useEffect(() => {
-    try {
-      const stored = window.localStorage.getItem(HISTORY_KEY);
-      if (stored) {
-        const parsed: HistoryItem[] = JSON.parse(stored);
-        setHistory(parsed.map((item) => ({ ...item, profitUsd: item.profitUsd ?? 0 })));
-      }
-    } catch {
-      // ignore malformed localStorage data
-    }
-    try {
-      const storedProfit = window.localStorage.getItem(PROFIT_BOOK_KEY);
-      if (storedProfit) setProfitBook(JSON.parse(storedProfit));
-    } catch {
-      // ignore malformed localStorage data
-    }
-    try {
-      const storedGoal = window.localStorage.getItem(GOAL_KEY);
-      if (storedGoal) {
-        const parsedGoal = Number(storedGoal);
-        if (isFinite(parsedGoal) && parsedGoal > 0) setGoalPrice(parsedGoal);
-      }
-    } catch {
-      // ignore malformed localStorage data
-    }
-    try {
-      const storedEntry = window.localStorage.getItem(ENTRY_KEY);
-      if (storedEntry) {
-        const parsedEntry = Number(storedEntry);
-        if (isFinite(parsedEntry) && parsedEntry > 0) setEntryPrice(parsedEntry);
-      }
-    } catch {
-      // ignore malformed localStorage data
-    }
+    goalPriceRef.current = goalPrice;
+  }, [goalPrice]);
+
+  useEffect(() => {
+    entryPriceRef.current = entryPrice;
+  }, [entryPrice]);
+
+  useEffect(() => {
     inputRef.current?.focus();
 
-    if (supabaseEnabled) {
-      fetchProfitEntries().then((entries) => {
-        if (entries !== null) {
-          setProfitBook(entries);
-          try {
-            window.localStorage.setItem(PROFIT_BOOK_KEY, JSON.stringify(entries));
-          } catch {
-            // localStorage unavailable, skip caching
-          }
-        }
+    Promise.all([fetchProfitEntries(), fetchPriceMarks(), fetchCommandHistory()])
+      .then(([entries, marks, historyItems]) => {
+        setProfitBook(entries);
+        setGoalPrice(marks.goal);
+        setEntryPrice(marks.entry);
+        setHistory(historyItems);
+      })
+      .catch((err) => {
+        setError(err instanceof Error ? err.message : "Could not load your data.");
       });
-    }
   }, []);
 
   useEffect(() => {
@@ -156,90 +131,81 @@ export default function Calculator() {
     return () => clearInterval(interval);
   }, []);
 
-  function saveHistory(next: HistoryItem[]) {
-    setHistory(next);
-    try {
-      window.localStorage.setItem(HISTORY_KEY, JSON.stringify(next));
-    } catch {
-      // localStorage unavailable, skip persisting
-    }
+  function logCommand(
+    kind: CommandKind,
+    command: string,
+    profitPercent: number | null = null,
+    profitUsd: number | null = null
+  ) {
+    const item: CommandHistoryItem = {
+      id: `${Date.now()}`,
+      kind,
+      command,
+      profitPercent,
+      profitUsd,
+      timestamp: Date.now(),
+    };
+    setHistory((prev) => [item, ...prev].slice(0, HISTORY_LIMIT));
+    insertCommandHistoryItem(userId, item).catch((err) => {
+      setError(err instanceof Error ? err.message : "Could not save to history.");
+    });
   }
 
-  function saveProfitBook(next: ProfitEntry[]) {
-    setProfitBook(next);
-    try {
-      window.localStorage.setItem(PROFIT_BOOK_KEY, JSON.stringify(next));
-    } catch {
-      // localStorage unavailable, skip persisting
-    }
-  }
-
-  function saveGoal(next: number | null) {
-    setGoalPrice(next);
-    try {
-      if (next === null) {
-        window.localStorage.removeItem(GOAL_KEY);
-      } else {
-        window.localStorage.setItem(GOAL_KEY, String(next));
-      }
-    } catch {
-      // localStorage unavailable, skip persisting
-    }
-  }
-
-  function saveEntry(next: number | null) {
-    setEntryPrice(next);
-    try {
-      if (next === null) {
-        window.localStorage.removeItem(ENTRY_KEY);
-      } else {
-        window.localStorage.setItem(ENTRY_KEY, String(next));
-      }
-    } catch {
-      // localStorage unavailable, skip persisting
-    }
+  function syncPriceMarks(goal: number | null, entry: number | null) {
+    upsertPriceMarks(userId, { goal, entry }).catch((err) => {
+      setError(err instanceof Error ? err.message : "Could not save your price marks.");
+    });
   }
 
   function handleSubmit() {
     if (!input.trim()) return;
-    const kind = getCommandKind(input);
+    const raw = input.trim();
+    const kind = getCommandKind(raw);
 
     if (kind === "cleargoal") {
-      saveGoal(null);
+      setGoalPrice(null);
+      syncPriceMarks(null, entryPriceRef.current);
       setError(null);
+      logCommand("cleargoal", raw);
       return;
     }
 
     if (kind === "goal") {
       try {
-        const point = parseGoalCommand(input);
-        saveGoal(point);
+        const point = parseGoalCommand(raw);
+        setGoalPrice(point);
+        syncPriceMarks(point, entryPriceRef.current);
         setError(null);
+        logCommand("goal", raw);
       } catch (err) {
-        setError(err instanceof Error ? err.message : "Lỗi không xác định.");
+        setError(err instanceof Error ? err.message : "Unknown error.");
       }
       return;
     }
 
     if (kind === "clearentry") {
-      saveEntry(null);
+      setEntryPrice(null);
+      syncPriceMarks(goalPriceRef.current, null);
       setError(null);
+      logCommand("clearentry", raw);
       return;
     }
 
     if (kind === "entry") {
       try {
-        const point = parseEntryCommand(input);
-        saveEntry(point);
+        const point = parseEntryCommand(raw);
+        setEntryPrice(point);
+        syncPriceMarks(goalPriceRef.current, point);
         setError(null);
+        logCommand("entry", raw);
       } catch (err) {
-        setError(err instanceof Error ? err.message : "Lỗi không xác định.");
+        setError(err instanceof Error ? err.message : "Unknown error.");
       }
       return;
     }
 
     try {
-      const parsed = parseCommand(input);
+      const parsed = parseCommand(raw);
       const calcResult = calculate(parsed);
       setResult(calcResult);
       setError(null);
@@ -254,31 +220,31 @@ export default function Calculator() {
           profitPercent: calcResult.profitPercent,
           timestamp: Date.now(),
         };
-        saveProfitBook([entry, ...profitBook]);
-        insertProfitEntry(entry);
-      } else {
-        const item: HistoryItem = {
-          id: `${Date.now()}`,
-          command: parsed.raw,
-          profitPercent: calcResult.profitPercent,
-          profitUsd: calcResult.profitUsd,
-        };
-        saveHistory([item, ...history].slice(0, HISTORY_LIMIT));
+        setProfitBook((prev) => [entry, ...prev]);
+        insertProfitEntry(userId, entry).catch((err) => {
+          setError(err instanceof Error ? err.message : "Could not save to your ledger.");
+        });
       }
+
+      logCommand(kind, parsed.raw, calcResult.profitPercent, calcResult.profitUsd);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Lỗi không xác định.");
+      setError(err instanceof Error ? err.message : "Unknown error.");
       setResult(null);
     }
   }
 
   function removeProfitEntry(id: string) {
-    saveProfitBook(profitBook.filter((e) => e.id !== id));
-    deleteProfitEntry(id);
+    setProfitBook((prev) => prev.filter((e) => e.id !== id));
+    deleteProfitEntry(id).catch((err) => {
+      setError(err instanceof Error ? err.message : "Could not delete that entry.");
+    });
   }
 
   function clearProfitBook() {
-    saveProfitBook([]);
-    clearProfitEntries();
+    setProfitBook([]);
+    clearProfitEntries().catch((err) => {
+      setError(err instanceof Error ? err.message : "Could not clear your ledger.");
+    });
   }
 
   function handleKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
@@ -336,9 +302,17 @@ export default function Calculator() {
 
         <div className="flex flex-col gap-5">
         <header className="flex items-center justify-between">
-          <h1 className="text-lg sm:text-xl font-bold tracking-tight">
-            <span className="text-btc">₿</span> Máy tính lợi nhuận BTC
-          </h1>
+          <div>
+            <h1 className="text-lg sm:text-xl font-bold tracking-tight">
+              <span className="text-btc">₿</span> BTC Profit Calculator
+            </h1>
+            <div className="text-[10px] sm:text-xs text-neutral-500 font-mono mt-0.5">
+              @{username} ·{" "}
+              <button onClick={() => signOutUser()} className="hover:text-btc underline">
+                Log out
+              </button>
+            </div>
+          </div>
           <div className="text-right font-mono text-xs sm:text-sm text-neutral-400">
             {currentPrice !== null ? (
               <>
@@ -354,8 +328,8 @@ export default function Calculator() {
                   ${formatUsd(currentPrice)}
                 </span>
                 <div className="text-[10px] sm:text-xs text-neutral-500">
-                  {priceConnected ? "cập nhật" : "mất kết nối, đang thử lại..."}{" "}
-                  {priceUpdatedAt?.toLocaleTimeString("vi-VN")}
+                  {priceConnected ? "updated" : "disconnected, retrying..."}{" "}
+                  {priceUpdatedAt?.toLocaleTimeString("en-US")}
                 </div>
                 {goalPrice !== null && goalDistancePercent !== null && (
                   <div
@@ -363,10 +337,10 @@ export default function Calculator() {
                       goalReached ? "text-profit" : "text-btc"
                     }`}
                   >
-                    Mục tiêu ${formatUsd(goalPrice)}{" "}
+                    Target ${formatUsd(goalPrice)}{" "}
                     {goalReached
-                      ? "— đã đạt!"
-                      : `— còn ${formatPercent(goalDistancePercent)}`}
+                      ? "— reached!"
+                      : `— ${formatPercent(goalDistancePercent)} away`}
                   </div>
                 )}
                 {entryPrice !== null && entryPnlPercent !== null && (
@@ -375,12 +349,12 @@ export default function Calculator() {
                       entryPnlPercent >= 0 ? "text-profit" : "text-loss"
                     }`}
                   >
-                    Vào lệnh ${formatUsd(entryPrice)} — {formatPercent(entryPnlPercent)}
+                    Entry ${formatUsd(entryPrice)} — {formatPercent(entryPnlPercent)}
                   </div>
                 )}
               </>
             ) : (
-              <span>Đang kết nối giá...</span>
+              <span>Connecting to price feed...</span>
             )}
           </div>
         </header>
@@ -409,13 +383,13 @@ export default function Calculator() {
                 disabled={currentPrice === null && entryPrice === null}
                 className="whitespace-nowrap px-3 py-2.5 rounded-lg border border-border text-xs sm:text-sm font-mono text-neutral-300 hover:border-btc hover:text-btc transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
               >
-                Dùng giá hiện tại
+                Use current price
               </button>
               <button
                 onClick={handleSubmit}
                 className="px-4 py-2.5 rounded-lg bg-btc text-black font-semibold text-sm sm:text-base hover:brightness-110 transition-all"
               >
-                Tính
+                Calculate
               </button>
             </div>
           </div>
@@ -445,16 +419,16 @@ export default function Calculator() {
             </div>
 
             <div className="grid grid-cols-2 gap-x-4 gap-y-2 font-mono text-sm">
-              <Stat label="Giá mua" value={`$${formatUsd(result.buyPrice)}`} />
-              <Stat label="Giá bán" value={`$${formatUsd(result.sellPrice)}`} />
-              <Stat label="Số BTC mua được" value={formatBtc(result.btcBought)} />
-              <Stat label="Vốn bỏ ra" value={`$${formatUsd(result.amountUsd)}`} />
+              <Stat label="Buy price" value={`$${formatUsd(result.buyPrice)}`} />
+              <Stat label="Sell price" value={`$${formatUsd(result.sellPrice)}`} />
+              <Stat label="BTC bought" value={formatBtc(result.btcBought)} />
+              <Stat label="Cost basis" value={`$${formatUsd(result.amountUsd)}`} />
               <Stat
-                label="Tổng tiền nhận về"
+                label="Total received"
                 value={`$${formatUsd(result.totalReceived)}`}
               />
               <Stat
-                label="Lãi / Lỗ"
+                label="Profit / Loss"
                 value={`${isProfit ? "+" : ""}$${formatUsd(result.profitUsd)}`}
                 valueClassName={isProfit ? "text-profit" : "text-loss"}
               />
@@ -464,31 +438,49 @@ export default function Calculator() {
 
         {history.length > 0 && (
           <div className="bg-panel border border-border rounded-xl p-4 sm:p-5">
-            <h2 className="text-xs uppercase tracking-wide text-neutral-500 font-mono mb-2">
-              Lịch sử ({history.length})
-            </h2>
-            <ul className="flex flex-col gap-1.5 font-mono text-xs sm:text-sm">
-              {history.map((item) => {
-                const itemIsProfit = item.profitPercent >= 0;
-                const colorClass = itemIsProfit ? "text-profit" : "text-loss";
-                return (
-                  <li
-                    key={item.id}
-                    className="flex items-center justify-between gap-2 text-neutral-300"
-                  >
-                    <span className="truncate">{item.command}</span>
-                    <span className="flex items-baseline gap-2 shrink-0">
-                      <span className={colorClass}>
-                        {formatPercent(item.profitPercent)}
-                      </span>
-                      <span className={`${colorClass} opacity-70 text-[11px] sm:text-xs`}>
-                        {formatUsdSigned(item.profitUsd)}
-                      </span>
-                    </span>
-                  </li>
-                );
-              })}
-            </ul>
+            <button
+              onClick={() => setHistoryOpen((v) => !v)}
+              className="w-full flex items-center justify-between text-xs uppercase tracking-wide text-neutral-500 font-mono"
+            >
+              <span>History ({history.length})</span>
+              <span className="text-neutral-600">{historyOpen ? "▲" : "▼"}</span>
+            </button>
+
+            {historyOpen && (
+              <ul className="mt-3 flex flex-col gap-1.5 font-mono text-xs sm:text-sm">
+                {history.map((item) => {
+                  const hasProfit = item.profitPercent !== null && item.profitUsd !== null;
+                  const itemIsProfit = hasProfit && (item.profitPercent as number) >= 0;
+                  const colorClass = hasProfit
+                    ? itemIsProfit
+                      ? "text-profit"
+                      : "text-loss"
+                    : "text-neutral-500";
+                  return (
+                    <li
+                      key={item.id}
+                      className="flex items-center justify-between gap-2 text-neutral-300"
+                    >
+                      <span className="truncate">{item.command}</span>
+                      {hasProfit ? (
+                        <span className="flex items-baseline gap-2 shrink-0">
+                          <span className={colorClass}>
+                            {formatPercent(item.profitPercent as number)}
+                          </span>
+                          <span className={`${colorClass} opacity-70 text-[11px] sm:text-xs`}>
+                            {formatUsdSigned(item.profitUsd as number)}
+                          </span>
+                        </span>
+                      ) : (
+                        <span className={`${colorClass} text-[11px] sm:text-xs shrink-0`}>
+                          {item.kind}
+                        </span>
+                      )}
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
           </div>
         )}
         </div>

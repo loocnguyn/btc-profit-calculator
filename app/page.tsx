@@ -1,5 +1,5 @@
-import Calculator from "@/components/Calculator";
+import AuthGate from "@/components/AuthGate";
 
 export default function Home() {
-  return <Calculator />;
+  return <AuthGate />;
 }

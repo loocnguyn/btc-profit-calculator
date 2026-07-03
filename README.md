@@ -1,69 +1,68 @@
-# Máy tính lợi nhuận BTC
+# BTC Profit Calculator
 
-Web app đơn giản tính lợi nhuận mua/bán BTC bằng lệnh dạng text, chạy 24/24 miễn phí trên Vercel.
+A simple web app for calculating BTC trading profit with text commands, running free 24/7 on Vercel. Requires a free account (username + password) — all data is synced to your account via Supabase.
 
-## Các lệnh
+## Commands
 
 ```
-/cal <giá_mua> <giá_bán> <số_tiền_usd>    — tính nhanh lãi, hiện ở Lịch sử
-/profit <entry> <sell> <vốn>              — ghi nhận khoản lãi vào Tổng lợi nhuận
-/goal <giá>                               — vẽ đường mục tiêu take-profit lên chart
-/cleargoal                                — xoá đường mục tiêu
-/entry <giá>                              — vẽ đường giá vào lệnh lên chart
-/clearentry                               — xoá đường giá vào lệnh
+/cal <buy_price> <sell_price> <amount_usd>   — quick profit calc, shown in History
+/profit <entry> <sell> <money>               — records profit into Total Profit
+/goal <price>                                — draws a take-profit target line on the chart
+/cleargoal                                   — removes the target line
+/entry <price>                               — draws an entry price line on the chart
+/clearentry                                  — removes the entry line
 ```
 
-Ví dụ: `/cal 59500 63500 151`
+Example: `/cal 59500 63500 151`
 
-## Chạy local
+## Run locally
 
 ```bash
 npm install
 npm run dev
 ```
 
-Mở http://localhost:3000
+Open http://localhost:3000
 
-## Deploy lên Vercel
+You'll need a Supabase project configured (see below) for the app to work — accounts are required, there is no guest/local-only mode.
 
-1. Push project này lên một repo GitHub.
-2. Vào [vercel.com](https://vercel.com) → **Add New Project** → import repo vừa push.
-3. Vercel tự nhận diện Next.js, không cần cấu hình thêm.
-4. (Tuỳ chọn) Thêm 2 biến môi trường Supabase — xem mục bên dưới.
-5. Bấm **Deploy** — xong, app chạy 24/24 miễn phí.
+## Supabase setup (required)
 
-## Lưu Sổ lãi dài hạn bằng Supabase (tuỳ chọn)
+This app uses Supabase for authentication and storing all your data (profit ledger, goal/entry price marks, command history).
 
-Mặc định app lưu mọi thứ bằng `localStorage` của trình duyệt — không cần bước này. Nếu muốn Sổ lãi (`/profit`) được lưu bền vững trên cloud (đồng bộ qua nhiều lần mở lại, không sợ mất khi xoá cache), làm theo:
-
-1. Tạo project free tại [supabase.com](https://supabase.com) → vào **Settings → API**, lấy `Project URL` và `anon public key`.
-2. Vào **SQL Editor**, chạy:
-   ```sql
-   create table if not exists profit_entries (
-     id text primary key,
-     user_code text not null,
-     entry numeric not null,
-     sell numeric not null,
-     money numeric not null,
-     profit_usd numeric not null,
-     profit_percent numeric not null,
-     created_at timestamptz default now()
-   );
-   create index if not exists idx_profit_entries_user on profit_entries(user_code);
-   alter table profit_entries enable row level security;
-   create policy "anon rw" on profit_entries for all
-     to anon using (true) with check (true);
-   ```
-3. Tạo file `.env.local` (đã có trong `.gitignore`, không commit lên git) từ mẫu `.env.local.example`, điền:
+1. Create a free project at [supabase.com](https://supabase.com) → **Settings → API**, grab the `Project URL` and `anon public key`.
+2. In **SQL Editor**, run the migration in `supabase/migration.sql` (or ask the app's maintainer for the schema — it creates `profiles`, `profit_entries`, `user_price_marks`, and `command_history`, all scoped to `auth.uid()` via row-level security).
+3. **Authentication → Providers → Email**: turn OFF "Confirm email". Accounts here use a synthetic internal email (`username@mail.btc-profit-calculator-tau.vercel.app`) that can't receive a real confirmation message, so sign-up would otherwise never produce a working session.
+4. Create `.env.local` (gitignored) from `.env.local.example`:
    ```
    NEXT_PUBLIC_SUPABASE_URL=https://xxxx.supabase.co
    NEXT_PUBLIC_SUPABASE_ANON_KEY=xxxxxxxx
    ```
-4. Trên Vercel: **Settings → Environment Variables**, thêm 2 biến trên → redeploy.
+5. On Vercel: **Settings → Environment Variables**, add the same two variables → redeploy.
 
-> Lưu ý: app không có đăng nhập, nên dữ liệu chỉ **tách theo một mã ngẫu nhiên lưu trong trình duyệt** (không phải bảo mật thật — ai có `anon key` + biết cách gọi API đều đọc/ghi được). Đủ dùng cho công cụ cá nhân, không phù hợp cho dữ liệu nhạy cảm nhiều người dùng.
+> Note: the login screen only ever asks for a "username", never an email — under the hood it signs up/in with Supabase Auth using a derived `username@mail.btc-profit-calculator-tau.vercel.app` address. Real per-user data isolation is enforced by Postgres row-level security (`auth.uid() = user_id`), not just client-side filtering.
 
-## Ghi chú
+## Google sign-in setup (optional)
 
-- Giá BTC hiện tại lấy real-time qua Binance WebSocket, tự reconnect khi rớt mạng; tiêu đề tab trình duyệt cũng hiển thị giá theo thời gian thực.
-- Goal/Entry, Lịch sử `/cal` luôn lưu ở `localStorage` (tạm thời theo trình duyệt). Sổ lãi `/profit` lưu `localStorage` mặc định, hoặc Supabase nếu đã cấu hình.
+The login screen has a "Continue with Google" button. It's wired up in the code, but Google is not a default-on Supabase provider — you need to create your own OAuth credentials:
+
+1. In [Google Cloud Console](https://console.cloud.google.com/apis/credentials), create an **OAuth 2.0 Client ID** (type: Web application).
+   - Authorized redirect URI: `https://<your-project-ref>.supabase.co/auth/v1/callback` (find the exact URL in Supabase Dashboard → Authentication → Providers → Google, it's shown there once you open the panel).
+2. Copy the generated **Client ID** and **Client Secret**.
+3. In Supabase Dashboard → **Authentication → Providers → Google**: enable it, paste the Client ID/Secret, save.
+4. In Supabase Dashboard → **Authentication → URL Configuration**: add your app's URL (both `http://localhost:3000` for local dev and your production Vercel URL) to **Redirect URLs**.
+
+Until this is configured, clicking "Continue with Google" will land on a Supabase error page instead of Google's consent screen — the username/password flow above works independently and doesn't require this.
+
+## Deploy to Vercel
+
+1. Push this project to a GitHub repo.
+2. Go to [vercel.com](https://vercel.com) → **Add New Project** → import the repo.
+3. Vercel auto-detects Next.js, no extra config needed.
+4. Add the two Supabase environment variables (see above).
+5. Click **Deploy**.
+
+## Notes
+
+- Live BTC price comes from a Binance WebSocket, auto-reconnects on drop; the browser tab title also shows the live price.
+- All personal data (profit ledger, goal/entry lines, command history) is stored in Supabase, scoped per account — nothing is kept in `localStorage` anymore.

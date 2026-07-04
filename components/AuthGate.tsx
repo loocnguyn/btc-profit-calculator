@@ -43,8 +43,9 @@ export default function AuthGate() {
 
   if (loading) {
     return (
-      <div className="min-h-screen flex items-center justify-center">
-        <p className="text-neutral-500 font-mono text-sm">Loading...</p>
+      <div className="min-h-screen flex flex-col items-center justify-center gap-3">
+        <span className="text-4xl text-btc animate-pulse">₿</span>
+        <p className="text-neutral-600 font-mono text-xs">Loading...</p>
       </div>
     );
   }

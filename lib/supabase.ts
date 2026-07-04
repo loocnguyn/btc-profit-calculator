@@ -1,4 +1,4 @@
-import { createClient, type SupabaseClient } from "@supabase/supabase-js";
+import { createClient, type Session, type SupabaseClient } from "@supabase/supabase-js";
 import type { CommandKind } from "@/lib/calc";
 import type { ProfitEntry } from "@/components/ProfitPanel";
 
@@ -49,6 +49,34 @@ export function signInWithGoogle() {
       redirectTo: typeof window !== "undefined" ? window.location.origin : undefined,
     },
   });
+}
+
+export interface Identity {
+  displayName: string;
+  email: string;
+  avatarUrl: string | null;
+  initials: string;
+}
+
+export function getIdentity(session: Session): Identity {
+  const meta = session.user.user_metadata ?? {};
+  const email = session.user.email ?? "";
+  const displayName =
+    (meta.full_name as string | undefined) ||
+    (meta.name as string | undefined) ||
+    (meta.username as string | undefined) ||
+    (email ? email.split("@")[0] : "user");
+  const avatarUrl =
+    (meta.avatar_url as string | undefined) ||
+    (meta.picture as string | undefined) ||
+    null;
+  const initials = displayName
+    .split(/[\s_]+/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((w) => w[0]?.toUpperCase() ?? "")
+    .join("") || "U";
+  return { displayName, email, avatarUrl, initials };
 }
 
 export async function getSession() {
@@ -142,6 +170,11 @@ export async function upsertPriceMarks(userId: string, marks: PriceMarks): Promi
   if (error) throw error;
 }
 
+export async function clearPriceMarks(userId: string): Promise<void> {
+  const { error } = await supabase.from("user_price_marks").delete().eq("user_id", userId);
+  if (error) throw error;
+}
+
 // ---- Unified command history ----
 
 export interface CommandHistoryItem {
@@ -198,5 +231,10 @@ export async function insertCommandHistoryItem(
     profit_usd: item.profitUsd,
     created_at: new Date(item.timestamp).toISOString(),
   });
+  if (error) throw error;
+}
+
+export async function clearCommandHistory(): Promise<void> {
+  const { error } = await supabase.from("command_history").delete().neq("id", "");
   if (error) throw error;
 }

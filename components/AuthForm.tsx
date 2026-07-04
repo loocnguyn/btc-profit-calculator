@@ -65,11 +65,21 @@ export default function AuthForm() {
   }
 
   return (
-    <div className="min-h-screen flex items-center justify-center px-4">
-      <div className="w-full max-w-sm bg-panel border border-border rounded-xl p-6 flex flex-col gap-4">
-        <h1 className="text-lg font-bold text-center">
-          <span className="text-btc">₿</span> BTC Profit Calculator
-        </h1>
+    <div className="min-h-screen relative flex items-center justify-center px-4 overflow-hidden">
+      <div
+        className="pointer-events-none absolute -top-40 left-1/2 -translate-x-1/2 w-[36rem] h-[36rem] rounded-full opacity-20 blur-3xl"
+        style={{ background: "radial-gradient(circle, #f7931a, transparent 70%)" }}
+      />
+
+      <div className="relative w-full max-w-sm bg-panel border border-border rounded-2xl p-6 sm:p-8 flex flex-col gap-5 shadow-2xl">
+        <div className="text-center flex flex-col gap-1">
+          <h1 className="text-xl font-bold tracking-tight">
+            <span className="text-btc">₿</span> BTC Profit Calculator
+          </h1>
+          <p className="text-xs text-neutral-500 font-mono">
+            Track trades, targets, and profit in real time.
+          </p>
+        </div>
 
         <button
           type="button"

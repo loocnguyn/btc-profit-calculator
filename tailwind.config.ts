@@ -10,6 +10,7 @@ const config: Config = {
       colors: {
         bg: "#0b0e14",
         panel: "#11151d",
+        surface: "#161b26",
         border: "#1e2430",
         btc: "#f7931a",
         profit: "#3ddc84",

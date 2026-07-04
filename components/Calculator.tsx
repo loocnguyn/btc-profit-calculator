@@ -14,6 +14,8 @@ import {
 import { formatBtc, formatPercent, formatUsd, formatUsdSigned } from "@/lib/format";
 import { useLivePrice } from "@/lib/useLivePrice";
 import {
+  clearCommandHistory,
+  clearPriceMarks,
   clearProfitEntries,
   deleteProfitEntry,
   fetchCommandHistory,
@@ -21,13 +23,13 @@ import {
   fetchProfitEntries,
   insertCommandHistoryItem,
   insertProfitEntry,
-  signOutUser,
   upsertPriceMarks,
   type CommandHistoryItem,
 } from "@/lib/supabase";
 import PriceChart, { type PricePoint } from "./PriceChart";
 import ProfitPanel, { type ProfitEntry } from "./ProfitPanel";
-import CommandHelp from "./CommandHelp";
+import Navbar from "./Navbar";
+import CommandReference from "./CommandReference";
 
 const HISTORY_LIMIT = 10;
 const CHART_APPEND_MS = 30_000;
@@ -35,13 +37,13 @@ const CHART_POINTS_LIMIT = 300;
 
 export default function Calculator({ session }: { session: Session }) {
   const userId = session.user.id;
-  const username = (session.user.user_metadata?.username as string | undefined) ?? "user";
 
   const [input, setInput] = useState("");
   const [result, setResult] = useState<CalcResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [history, setHistory] = useState<CommandHistoryItem[]>([]);
   const [historyOpen, setHistoryOpen] = useState(false);
+  const [commandsOpen, setCommandsOpen] = useState(false);
   const [profitBook, setProfitBook] = useState<ProfitEntry[]>([]);
   const [priceHistory, setPriceHistory] = useState<PricePoint[]>([]);
   const [goalPrice, setGoalPrice] = useState<number | null>(null);
@@ -247,6 +249,21 @@ export default function Calculator({ session }: { session: Session }) {
     });
   }
 
+  function clearAllData() {
+    setProfitBook([]);
+    setHistory([]);
+    setGoalPrice(null);
+    setEntryPrice(null);
+    setResult(null);
+    Promise.all([
+      clearProfitEntries(),
+      clearCommandHistory(),
+      clearPriceMarks(userId),
+    ]).catch((err) => {
+      setError(err instanceof Error ? err.message : "Could not clear all your data.");
+    });
+  }
+
   function handleKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
     if (e.key === "Enter") handleSubmit();
   }
@@ -289,203 +306,197 @@ export default function Calculator({ session }: { session: Session }) {
       : null;
 
   return (
-    <div className="min-h-screen flex flex-col items-center px-4 py-6 sm:py-10">
-      <div className="w-full max-w-5xl flex flex-col lg:grid lg:grid-cols-[300px_minmax(0,1fr)] gap-5 lg:items-start">
-        <div className="flex flex-col gap-5 lg:sticky lg:top-6">
-          <CommandHelp />
-          <ProfitPanel
-            entries={profitBook}
-            onRemove={removeProfitEntry}
-            onClearAll={clearProfitBook}
-          />
-        </div>
+    <>
+      <Navbar
+        session={session}
+        price={currentPrice}
+        flash={priceFlash}
+        connected={priceConnected}
+        updatedAt={priceUpdatedAt}
+        onOpenCommands={() => setCommandsOpen(true)}
+        onClearAll={clearAllData}
+      />
 
-        <div className="flex flex-col gap-5">
-        <header className="flex items-center justify-between">
-          <div>
-            <h1 className="text-lg sm:text-xl font-bold tracking-tight">
-              <span className="text-btc">₿</span> BTC Profit Calculator
-            </h1>
-            <div className="text-[10px] sm:text-xs text-neutral-500 font-mono mt-0.5">
-              @{username} ·{" "}
-              <button onClick={() => signOutUser()} className="hover:text-btc underline">
-                Log out
-              </button>
-            </div>
-          </div>
-          <div className="text-right font-mono text-xs sm:text-sm text-neutral-400">
-            {currentPrice !== null ? (
-              <>
-                <span
-                  className={`transition-colors duration-500 ${
-                    priceFlash === "up"
-                      ? "text-profit"
-                      : priceFlash === "down"
-                        ? "text-loss"
-                        : "text-neutral-200"
-                  }`}
-                >
-                  ${formatUsd(currentPrice)}
-                </span>
-                <div className="text-[10px] sm:text-xs text-neutral-500">
-                  {priceConnected ? "updated" : "disconnected, retrying..."}{" "}
-                  {priceUpdatedAt?.toLocaleTimeString("en-US")}
-                </div>
-                {goalPrice !== null && goalDistancePercent !== null && (
-                  <div
-                    className={`text-[10px] sm:text-xs ${
-                      goalReached ? "text-profit" : "text-btc"
-                    }`}
-                  >
-                    Target ${formatUsd(goalPrice)}{" "}
-                    {goalReached
-                      ? "— reached!"
-                      : `— ${formatPercent(goalDistancePercent)} away`}
-                  </div>
-                )}
-                {entryPrice !== null && entryPnlPercent !== null && (
-                  <div
-                    className={`text-[10px] sm:text-xs ${
-                      entryPnlPercent >= 0 ? "text-profit" : "text-loss"
-                    }`}
-                  >
-                    Entry ${formatUsd(entryPrice)} — {formatPercent(entryPnlPercent)}
-                  </div>
-                )}
-              </>
-            ) : (
-              <span>Connecting to price feed...</span>
-            )}
-          </div>
-        </header>
-
-        <div className="bg-panel border border-border rounded-xl p-3 sm:p-4">
-          <PriceChart
-            points={priceHistory}
-            goal={goalPrice}
-            entry={entryPrice}
-            currentPrice={currentPrice}
-          />
-        </div>
-
-        <div className="bg-panel border border-border rounded-xl p-4 sm:p-5 flex flex-col gap-3">
-          <div className="flex flex-col sm:flex-row gap-2">
-            <input
-              ref={inputRef}
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              onKeyDown={handleKeyDown}
-              className="flex-1 bg-bg border border-border rounded-lg px-3 py-2.5 font-mono text-sm sm:text-base text-neutral-100 placeholder:text-neutral-600 outline-none focus:border-btc transition-colors"
+      <div className="min-h-screen flex flex-col items-center px-4 py-6 sm:py-10">
+        <div className="w-full max-w-5xl flex flex-col lg:grid lg:grid-cols-[300px_minmax(0,1fr)] gap-5 lg:items-start">
+          <div className="flex flex-col gap-5 lg:sticky lg:top-20">
+            <ProfitPanel
+              entries={profitBook}
+              onRemove={removeProfitEntry}
+              onClearAll={clearProfitBook}
             />
-            <div className="flex gap-2">
-              <button
-                onClick={useCurrentPriceAsSell}
-                disabled={currentPrice === null && entryPrice === null}
-                className="whitespace-nowrap px-3 py-2.5 rounded-lg border border-border text-xs sm:text-sm font-mono text-neutral-300 hover:border-btc hover:text-btc transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-              >
-                Use current price
-              </button>
-              <button
-                onClick={handleSubmit}
-                className="px-4 py-2.5 rounded-lg bg-btc text-black font-semibold text-sm sm:text-base hover:brightness-110 transition-all"
-              >
-                Calculate
-              </button>
-            </div>
           </div>
-          {error && (
-            <p className="text-loss text-sm font-mono">{error}</p>
-          )}
-        </div>
 
-        {result && (
-          <div className="bg-panel border border-border rounded-xl p-4 sm:p-5 flex flex-col gap-4">
-            <div className="text-center">
-              <div
-                className={`text-4xl sm:text-5xl font-bold font-mono ${
-                  isProfit ? "text-profit" : "text-loss"
-                }`}
-              >
-                {formatPercent(result.profitPercent)}
-              </div>
-              <div
-                className={`mt-1 text-sm sm:text-base font-mono ${
-                  isProfit ? "text-profit" : "text-loss"
-                }`}
-              >
-                {isProfit ? "+" : ""}
-                {formatUsd(result.profitUsd)} USD
-              </div>
-            </div>
-
-            <div className="grid grid-cols-2 gap-x-4 gap-y-2 font-mono text-sm">
-              <Stat label="Buy price" value={`$${formatUsd(result.buyPrice)}`} />
-              <Stat label="Sell price" value={`$${formatUsd(result.sellPrice)}`} />
-              <Stat label="BTC bought" value={formatBtc(result.btcBought)} />
-              <Stat label="Cost basis" value={`$${formatUsd(result.amountUsd)}`} />
-              <Stat
-                label="Total received"
-                value={`$${formatUsd(result.totalReceived)}`}
-              />
-              <Stat
-                label="Profit / Loss"
-                value={`${isProfit ? "+" : ""}$${formatUsd(result.profitUsd)}`}
-                valueClassName={isProfit ? "text-profit" : "text-loss"}
-              />
-            </div>
-          </div>
-        )}
-
-        {history.length > 0 && (
-          <div className="bg-panel border border-border rounded-xl p-4 sm:p-5">
-            <button
-              onClick={() => setHistoryOpen((v) => !v)}
-              className="w-full flex items-center justify-between text-xs uppercase tracking-wide text-neutral-500 font-mono"
-            >
-              <span>History ({history.length})</span>
-              <span className="text-neutral-600">{historyOpen ? "▲" : "▼"}</span>
-            </button>
-
-            {historyOpen && (
-              <ul className="mt-3 flex flex-col gap-1.5 font-mono text-xs sm:text-sm">
-                {history.map((item) => {
-                  const hasProfit = item.profitPercent !== null && item.profitUsd !== null;
-                  const itemIsProfit = hasProfit && (item.profitPercent as number) >= 0;
-                  const colorClass = hasProfit
-                    ? itemIsProfit
-                      ? "text-profit"
-                      : "text-loss"
-                    : "text-neutral-500";
-                  return (
-                    <li
-                      key={item.id}
-                      className="flex items-center justify-between gap-2 text-neutral-300"
+          <div className="flex flex-col gap-5">
+            <div className="bg-panel border border-border rounded-xl p-3 sm:p-4 flex flex-col gap-2">
+              {(goalPrice !== null || entryPrice !== null) && (
+                <div className="flex flex-wrap gap-2 text-[11px] sm:text-xs font-mono">
+                  {goalPrice !== null && goalDistancePercent !== null && (
+                    <span
+                      className={`px-2 py-1 rounded-full border border-border ${
+                        goalReached ? "text-profit" : "text-btc"
+                      }`}
                     >
-                      <span className="truncate">{item.command}</span>
-                      {hasProfit ? (
-                        <span className="flex items-baseline gap-2 shrink-0">
-                          <span className={colorClass}>
-                            {formatPercent(item.profitPercent as number)}
-                          </span>
-                          <span className={`${colorClass} opacity-70 text-[11px] sm:text-xs`}>
-                            {formatUsdSigned(item.profitUsd as number)}
-                          </span>
-                        </span>
-                      ) : (
-                        <span className={`${colorClass} text-[11px] sm:text-xs shrink-0`}>
-                          {item.kind}
-                        </span>
-                      )}
-                    </li>
-                  );
-                })}
-              </ul>
+                      Target ${formatUsd(goalPrice)}{" "}
+                      {goalReached
+                        ? "— reached!"
+                        : `— ${formatPercent(goalDistancePercent)} away`}
+                    </span>
+                  )}
+                  {entryPrice !== null && entryPnlPercent !== null && (
+                    <span
+                      className={`px-2 py-1 rounded-full border border-border ${
+                        entryPnlPercent >= 0 ? "text-profit" : "text-loss"
+                      }`}
+                    >
+                      Entry ${formatUsd(entryPrice)} — {formatPercent(entryPnlPercent)}
+                    </span>
+                  )}
+                </div>
+              )}
+              <PriceChart
+                points={priceHistory}
+                goal={goalPrice}
+                entry={entryPrice}
+                currentPrice={currentPrice}
+              />
+            </div>
+
+            <div className="bg-panel border border-border rounded-xl p-4 sm:p-5 flex flex-col gap-3">
+              <div className="flex flex-col sm:flex-row gap-2">
+                <div className="flex-1 flex items-center gap-2 bg-bg border border-border rounded-lg px-3 focus-within:border-btc transition-colors">
+                  <span className="text-btc font-mono text-sm sm:text-base select-none">
+                    &gt;
+                  </span>
+                  <input
+                    ref={inputRef}
+                    value={input}
+                    onChange={(e) => setInput(e.target.value)}
+                    onKeyDown={handleKeyDown}
+                    placeholder="Type a command — e.g. /cal 59500 63500 151"
+                    className="flex-1 bg-transparent py-2.5 font-mono text-sm sm:text-base text-neutral-100 placeholder:text-neutral-600 outline-none"
+                  />
+                </div>
+                <div className="flex gap-2">
+                  <button
+                    onClick={() => setCommandsOpen(true)}
+                    aria-label="Command reference"
+                    className="px-3 py-2.5 rounded-lg border border-border text-sm font-mono text-neutral-400 hover:border-btc hover:text-btc transition-colors"
+                  >
+                    ?
+                  </button>
+                  <button
+                    onClick={useCurrentPriceAsSell}
+                    disabled={currentPrice === null && entryPrice === null}
+                    className="whitespace-nowrap px-3 py-2.5 rounded-lg border border-border text-xs sm:text-sm font-mono text-neutral-300 hover:border-btc hover:text-btc transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                  >
+                    Use current price
+                  </button>
+                  <button
+                    onClick={handleSubmit}
+                    className="px-4 py-2.5 rounded-lg bg-btc text-black font-semibold text-sm sm:text-base hover:brightness-110 transition-all"
+                  >
+                    Calculate
+                  </button>
+                </div>
+              </div>
+              {error && <p className="text-loss text-sm font-mono">{error}</p>}
+            </div>
+
+            {result && (
+              <div className="bg-panel border border-border rounded-xl p-4 sm:p-5 flex flex-col gap-4">
+                <div className="text-center">
+                  <div
+                    className={`text-4xl sm:text-5xl font-bold font-mono ${
+                      isProfit ? "text-profit" : "text-loss"
+                    }`}
+                  >
+                    {formatPercent(result.profitPercent)}
+                  </div>
+                  <div
+                    className={`mt-1 text-sm sm:text-base font-mono ${
+                      isProfit ? "text-profit" : "text-loss"
+                    }`}
+                  >
+                    {isProfit ? "+" : ""}
+                    {formatUsd(result.profitUsd)} USD
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-x-4 gap-y-2 font-mono text-sm">
+                  <Stat label="Buy price" value={`$${formatUsd(result.buyPrice)}`} />
+                  <Stat label="Sell price" value={`$${formatUsd(result.sellPrice)}`} />
+                  <Stat label="BTC bought" value={formatBtc(result.btcBought)} />
+                  <Stat label="Cost basis" value={`$${formatUsd(result.amountUsd)}`} />
+                  <Stat
+                    label="Total received"
+                    value={`$${formatUsd(result.totalReceived)}`}
+                  />
+                  <Stat
+                    label="Profit / Loss"
+                    value={`${isProfit ? "+" : ""}$${formatUsd(result.profitUsd)}`}
+                    valueClassName={isProfit ? "text-profit" : "text-loss"}
+                  />
+                </div>
+              </div>
+            )}
+
+            {history.length > 0 && (
+              <div className="bg-panel border border-border rounded-xl p-4 sm:p-5">
+                <button
+                  onClick={() => setHistoryOpen((v) => !v)}
+                  className="w-full flex items-center justify-between text-xs uppercase tracking-wide text-neutral-500 font-mono"
+                >
+                  <span>History ({history.length})</span>
+                  <span className="text-neutral-600">{historyOpen ? "▲" : "▼"}</span>
+                </button>
+
+                {historyOpen && (
+                  <ul className="mt-3 flex flex-col gap-1.5 font-mono text-xs sm:text-sm">
+                    {history.map((item) => {
+                      const hasProfit =
+                        item.profitPercent !== null && item.profitUsd !== null;
+                      const itemIsProfit = hasProfit && (item.profitPercent as number) >= 0;
+                      const colorClass = hasProfit
+                        ? itemIsProfit
+                          ? "text-profit"
+                          : "text-loss"
+                        : "text-neutral-500";
+                      return (
+                        <li
+                          key={item.id}
+                          className="flex items-center justify-between gap-2 text-neutral-300"
+                        >
+                          <span className="truncate">{item.command}</span>
+                          {hasProfit ? (
+                            <span className="flex items-baseline gap-2 shrink-0">
+                              <span className={colorClass}>
+                                {formatPercent(item.profitPercent as number)}
+                              </span>
+                              <span
+                                className={`${colorClass} opacity-70 text-[11px] sm:text-xs`}
+                              >
+                                {formatUsdSigned(item.profitUsd as number)}
+                              </span>
+                            </span>
+                          ) : (
+                            <span className={`${colorClass} text-[11px] sm:text-xs shrink-0`}>
+                              {item.kind}
+                            </span>
+                          )}
+                        </li>
+                      );
+                    })}
+                  </ul>
+                )}
+              </div>
             )}
           </div>
-        )}
         </div>
       </div>
-    </div>
+
+      {commandsOpen && <CommandReference onClose={() => setCommandsOpen(false)} />}
+    </>
   );
 }
 

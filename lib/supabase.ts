@@ -1,37 +1,93 @@
-import { createClient, type SupabaseClient } from "@supabase/supabase-js";
+import { createClient, type Session, type SupabaseClient } from "@supabase/supabase-js";
+import type { CommandKind } from "@/lib/calc";
 import type { ProfitEntry } from "@/components/ProfitPanel";
 
-const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
-const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+const url = process.env.NEXT_PUBLIC_SUPABASE_URL ?? "";
+const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ?? "";
 
 export const supabaseEnabled = Boolean(url && anonKey);
 
-export const supabase: SupabaseClient | null = supabaseEnabled
-  ? createClient(url as string, anonKey as string)
-  : null;
+export const supabase: SupabaseClient = createClient(
+  url || "https://placeholder.invalid",
+  anonKey || "placeholder"
+);
 
-const USER_CODE_KEY = "btc-user-code";
+const EMAIL_DOMAIN = "mail.btc-profit-calculator-tau.vercel.app";
+const USERNAME_PATTERN = /^[a-z0-9_]{3,20}$/;
 
-/** Random per-browser code that soft-partitions rows (no login). */
-export function getUserCode(): string {
-  if (typeof window === "undefined") return "server";
-  try {
-    let code = window.localStorage.getItem(USER_CODE_KEY);
-    if (!code) {
-      code =
-        (crypto.randomUUID?.() ??
-          `${Date.now()}-${Math.random().toString(36).slice(2)}`);
-      window.localStorage.setItem(USER_CODE_KEY, code);
-    }
-    return code;
-  } catch {
-    return "anon";
-  }
+export function isValidUsername(username: string): boolean {
+  return USERNAME_PATTERN.test(username.trim().toLowerCase());
 }
+
+export function toSyntheticEmail(username: string): string {
+  return `${username.trim().toLowerCase()}@${EMAIL_DOMAIN}`;
+}
+
+export function signUpWithUsername(username: string, password: string) {
+  return supabase.auth.signUp({
+    email: toSyntheticEmail(username),
+    password,
+    options: { data: { username: username.trim().toLowerCase() } },
+  });
+}
+
+export function signInWithUsername(username: string, password: string) {
+  return supabase.auth.signInWithPassword({
+    email: toSyntheticEmail(username),
+    password,
+  });
+}
+
+export function signOutUser() {
+  return supabase.auth.signOut();
+}
+
+export function signInWithGoogle() {
+  return supabase.auth.signInWithOAuth({
+    provider: "google",
+    options: {
+      redirectTo: typeof window !== "undefined" ? window.location.origin : undefined,
+    },
+  });
+}
+
+export interface Identity {
+  displayName: string;
+  email: string;
+  avatarUrl: string | null;
+  initials: string;
+}
+
+export function getIdentity(session: Session): Identity {
+  const meta = session.user.user_metadata ?? {};
+  const email = session.user.email ?? "";
+  const displayName =
+    (meta.full_name as string | undefined) ||
+    (meta.name as string | undefined) ||
+    (meta.username as string | undefined) ||
+    (email ? email.split("@")[0] : "user");
+  const avatarUrl =
+    (meta.avatar_url as string | undefined) ||
+    (meta.picture as string | undefined) ||
+    null;
+  const initials = displayName
+    .split(/[\s_]+/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((w) => w[0]?.toUpperCase() ?? "")
+    .join("") || "U";
+  return { displayName, email, avatarUrl, initials };
+}
+
+export async function getSession() {
+  const { data } = await supabase.auth.getSession();
+  return data.session;
+}
+
+// ---- Profit ledger ----
 
 interface ProfitRow {
   id: string;
-  user_code: string;
   entry: number;
   sell: number;
   money: number;
@@ -52,65 +108,133 @@ function rowToEntry(r: ProfitRow): ProfitEntry {
   };
 }
 
-function entryToRow(e: ProfitEntry, userCode: string): ProfitRow {
-  return {
-    id: e.id,
-    user_code: userCode,
-    entry: e.entry,
-    sell: e.sell,
-    money: e.money,
-    profit_usd: e.profitUsd,
-    profit_percent: e.profitPercent,
-    created_at: new Date(e.timestamp).toISOString(),
-  };
+export async function fetchProfitEntries(): Promise<ProfitEntry[]> {
+  const { data, error } = await supabase
+    .from("profit_entries")
+    .select("*")
+    .order("created_at", { ascending: false });
+  if (error) throw error;
+  return (data as ProfitRow[]).map(rowToEntry);
 }
 
-/** Fetch this user's profit entries, newest first. Returns null on failure. */
-export async function fetchProfitEntries(): Promise<ProfitEntry[] | null> {
-  if (!supabase) return null;
-  try {
-    const { data, error } = await supabase
-      .from("profit_entries")
-      .select("*")
-      .eq("user_code", getUserCode())
-      .order("created_at", { ascending: false });
-    if (error || !data) return null;
-    return (data as ProfitRow[]).map(rowToEntry);
-  } catch {
-    return null;
-  }
-}
-
-export async function insertProfitEntry(entry: ProfitEntry): Promise<void> {
-  if (!supabase) return;
-  try {
-    await supabase.from("profit_entries").insert(entryToRow(entry, getUserCode()));
-  } catch {
-    // best-effort; localStorage remains the source of truth on failure
-  }
+export async function insertProfitEntry(userId: string, entry: ProfitEntry): Promise<void> {
+  const { error } = await supabase.from("profit_entries").insert({
+    id: entry.id,
+    user_id: userId,
+    entry: entry.entry,
+    sell: entry.sell,
+    money: entry.money,
+    profit_usd: entry.profitUsd,
+    profit_percent: entry.profitPercent,
+    created_at: new Date(entry.timestamp).toISOString(),
+  });
+  if (error) throw error;
 }
 
 export async function deleteProfitEntry(id: string): Promise<void> {
-  if (!supabase) return;
-  try {
-    await supabase
-      .from("profit_entries")
-      .delete()
-      .eq("user_code", getUserCode())
-      .eq("id", id);
-  } catch {
-    // best-effort
-  }
+  const { error } = await supabase.from("profit_entries").delete().eq("id", id);
+  if (error) throw error;
 }
 
 export async function clearProfitEntries(): Promise<void> {
-  if (!supabase) return;
-  try {
-    await supabase
-      .from("profit_entries")
-      .delete()
-      .eq("user_code", getUserCode());
-  } catch {
-    // best-effort
-  }
+  const { error } = await supabase.from("profit_entries").delete().neq("id", "");
+  if (error) throw error;
+}
+
+// ---- Goal / entry price marks ----
+
+export interface PriceMarks {
+  goal: number | null;
+  entry: number | null;
+}
+
+export async function fetchPriceMarks(): Promise<PriceMarks> {
+  const { data, error } = await supabase
+    .from("user_price_marks")
+    .select("goal_price, entry_price")
+    .maybeSingle();
+  if (error) throw error;
+  return {
+    goal: data?.goal_price ?? null,
+    entry: data?.entry_price ?? null,
+  };
+}
+
+export async function upsertPriceMarks(userId: string, marks: PriceMarks): Promise<void> {
+  const { error } = await supabase.from("user_price_marks").upsert({
+    user_id: userId,
+    goal_price: marks.goal,
+    entry_price: marks.entry,
+    updated_at: new Date().toISOString(),
+  });
+  if (error) throw error;
+}
+
+export async function clearPriceMarks(userId: string): Promise<void> {
+  const { error } = await supabase.from("user_price_marks").delete().eq("user_id", userId);
+  if (error) throw error;
+}
+
+// ---- Unified command history ----
+
+export interface CommandHistoryItem {
+  id: string;
+  kind: CommandKind;
+  command: string;
+  profitPercent: number | null;
+  profitUsd: number | null;
+  timestamp: number;
+}
+
+interface CommandHistoryRow {
+  id: string;
+  kind: string;
+  command: string;
+  profit_percent: number | null;
+  profit_usd: number | null;
+  created_at?: string;
+}
+
+function rowToHistoryItem(r: CommandHistoryRow): CommandHistoryItem {
+  return {
+    id: r.id,
+    kind: r.kind as CommandKind,
+    command: r.command,
+    profitPercent: r.profit_percent,
+    profitUsd: r.profit_usd,
+    timestamp: r.created_at ? new Date(r.created_at).getTime() : Date.now(),
+  };
+}
+
+const HISTORY_FETCH_LIMIT = 10;
+
+export async function fetchCommandHistory(): Promise<CommandHistoryItem[]> {
+  const { data, error } = await supabase
+    .from("command_history")
+    .select("*")
+    .order("created_at", { ascending: false })
+    .limit(HISTORY_FETCH_LIMIT);
+  if (error) throw error;
+  return (data as CommandHistoryRow[]).map(rowToHistoryItem);
+}
+
+export async function insertCommandHistoryItem(
+  userId: string,
+  item: CommandHistoryItem
+): Promise<void> {
+  const { error } = await supabase.from("command_history").insert({
+    id: item.id,
+    user_id: userId,
+    kind: item.kind,
+    command: item.command,
+    profit_percent: item.profitPercent,
+    profit_usd: item.profitUsd,
+    created_at: new Date(item.timestamp).toISOString(),
+  });
+  if (error) throw error;
+}
+
+export async function clearCommandHistory(): Promise<void> {
+  const { error } = await supabase.from("command_history").delete().neq("id", "");
+  if (error) throw error;
 }

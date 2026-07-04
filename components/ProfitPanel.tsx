@@ -30,7 +30,7 @@ export default function ProfitPanel({
     <div className="bg-panel border border-border rounded-xl p-4 sm:p-5 flex flex-col gap-4">
       <div>
         <div className="text-xs uppercase tracking-wide text-neutral-500 font-mono mb-1">
-          Tổng lợi nhuận
+          Total Profit
         </div>
         <div
           className={`text-3xl sm:text-4xl font-bold font-mono ${
@@ -41,25 +41,25 @@ export default function ProfitPanel({
         </div>
         {entries.length > 0 && (
           <div className="mt-1 font-mono text-xs sm:text-sm text-neutral-500">
-            Vốn: ${formatUsd(totalMoney)} · {formatPercent(overallPercent)}
+            Cost basis: ${formatUsd(totalMoney)} · {formatPercent(overallPercent)}
           </div>
         )}
       </div>
 
       <div className="flex items-center justify-between">
         <h2 className="text-xs uppercase tracking-wide text-neutral-500 font-mono">
-          Sổ lãi ({entries.length})
+          Ledger ({entries.length})
         </h2>
         {entries.length > 0 && (
           <button
             onClick={() => {
-              if (window.confirm("Xoá toàn bộ sổ lãi? Không thể hoàn tác.")) {
+              if (window.confirm("Delete the entire ledger? This cannot be undone.")) {
                 onClearAll();
               }
             }}
             className="text-xs font-mono text-neutral-500 hover:text-loss transition-colors"
           >
-            Xoá tất cả
+            Clear all
           </button>
         )}
       </div>
@@ -79,7 +79,7 @@ export default function ProfitPanel({
                     {formatUsd(e.entry)} → {formatUsd(e.sell)}
                   </div>
                   <div className="text-neutral-600 text-[10px] sm:text-xs">
-                    vốn ${formatUsd(e.money)}
+                    cost ${formatUsd(e.money)}
                   </div>
                 </div>
                 <div className="flex items-center gap-2 shrink-0">
@@ -91,7 +91,7 @@ export default function ProfitPanel({
                   </div>
                   <button
                     onClick={() => onRemove(e.id)}
-                    aria-label="Xoá khoản này"
+                    aria-label="Delete this entry"
                     className="text-neutral-600 hover:text-loss transition-colors px-1"
                   >
                     ✕

@@ -39,8 +39,8 @@ export function parsePriceArg(input: string, cmd: "goal" | "entry"): number {
   const point = Number(input.trim().replace(prefix, "").trim());
 
   if (!isFinite(point) || isNaN(point) || point <= 0) {
-    const usage = cmd === "goal" ? "/goal <mức_giá>" : "/entry <giá_vào>";
-    throw new Error(`Cú pháp không đúng. Dùng: ${usage}`);
+    const usage = cmd === "goal" ? "/goal <price>" : "/entry <price>";
+    throw new Error(`Invalid syntax. Use: ${usage}`);
   }
 
   return point;
@@ -61,7 +61,7 @@ export function parseCommand(input: string): ParsedCommand {
 
   if (parts.length !== 3) {
     throw new Error(
-      "Cú pháp không đúng. Dùng: /cal <giá_mua> <giá_bán> <số_tiền_usd> hoặc /profit <entry> <sell> <vốn>"
+      "Invalid syntax. Use: /cal <buy_price> <sell_price> <amount_usd> or /profit <entry> <sell> <money>"
     );
   }
 
@@ -71,13 +71,13 @@ export function parseCommand(input: string): ParsedCommand {
   const amountUsd = Number(amountStr);
 
   if (!isFinite(buyPrice) || isNaN(buyPrice) || buyPrice <= 0) {
-    throw new Error("Giá mua phải là số dương hợp lệ.");
+    throw new Error("Buy price must be a valid positive number.");
   }
   if (!isFinite(sellPrice) || isNaN(sellPrice) || sellPrice <= 0) {
-    throw new Error("Giá bán phải là số dương hợp lệ.");
+    throw new Error("Sell price must be a valid positive number.");
   }
   if (!isFinite(amountUsd) || isNaN(amountUsd) || amountUsd <= 0) {
-    throw new Error("Số tiền phải là số dương hợp lệ.");
+    throw new Error("Amount must be a valid positive number.");
   }
 
   return { raw: trimmed, buyPrice, sellPrice, amountUsd };

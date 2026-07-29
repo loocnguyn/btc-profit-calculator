@@ -65,4 +65,5 @@ Until this is configured, clicking "Continue with Google" will land on a Supabas
 ## Notes
 
 - Live BTC price comes from a Binance WebSocket, auto-reconnects on drop; the browser tab title also shows the live price.
-- All personal data (profit ledger, goal/entry lines, command history) is stored in Supabase, scoped per account — nothing is kept in `localStorage` anymore.
+- The chart is a candlestick chart built with [lightweight-charts](https://github.com/tradingview/lightweight-charts). Candles come from Binance klines — REST for history (500 candles) plus a `@kline_<interval>` WebSocket that keeps the newest candle updating live. Timeframes: 15m / 1H / 4H / 1D / 1W, with MA(7)/MA(25)/MA(99) overlays and volume bars. No API key needed, and no CoinGecko dependency anymore.
+- The selected timeframe is remembered in `localStorage` (a display preference). All *personal* data (profit ledger, goal/entry lines, command history) lives in Supabase, scoped per account by row-level security.

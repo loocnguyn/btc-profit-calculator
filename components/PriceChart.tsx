@@ -1,236 +1,336 @@
 "use client";
 
-import { useId, useMemo, useState, type MouseEvent } from "react";
-import { formatUsd } from "@/lib/format";
+import { useEffect, useRef, useState } from "react";
+import {
+  CandlestickSeries,
+  ColorType,
+  CrosshairMode,
+  HistogramSeries,
+  LineSeries,
+  LineStyle,
+  createChart,
+  type IChartApi,
+  type IPriceLine,
+  type ISeriesApi,
+  type UTCTimestamp,
+} from "lightweight-charts";
+import { formatPercent, formatUsd } from "@/lib/format";
+import { sma, smaAt } from "@/lib/indicators";
+import { INTERVALS, useKlines, type Candle, type Interval } from "@/lib/useKlines";
 
-export interface PricePoint {
-  t: number;
-  p: number;
+const INTERVAL_KEY = "btc-chart-interval";
+
+const UP = "#3ddc84";
+const DOWN = "#ff4d4f";
+const GRID = "#1e2430";
+const AXIS_TEXT = "#8b93a7";
+const CROSSHAIR = "#3a3f4b";
+const GOAL_COLOR = "#f7931a";
+const ENTRY_COLOR = "#38bdf8";
+const MONO = "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace";
+
+const MAS = [
+  { period: 7, color: "#f0b90b" },
+  { period: 25, color: "#e5379c" },
+  { period: 99, color: "#8b5cf6" },
+];
+
+function toCandleData(c: Candle) {
+  return {
+    time: c.time as UTCTimestamp,
+    open: c.open,
+    high: c.high,
+    low: c.low,
+    close: c.close,
+  };
 }
 
-const WIDTH = 600;
-const HEIGHT = 120;
-const PADDING = 8;
-const LABEL_HEIGHT = 16;
-
-/** A dashed horizontal price line with a labelled pill offset off the line. */
-function ChartPriceLine({
-  y,
-  color,
-  text,
-  preferBelow = false,
-}: {
-  y: number;
-  color: string;
-  text: string;
-  preferBelow?: boolean;
-}) {
-  const labelWidth = text.length * 6.4 + 12;
-  const roomAbove = y - PADDING > LABEL_HEIGHT + 4;
-  const roomBelow = HEIGHT - PADDING - y > LABEL_HEIGHT + 4;
-  const below = preferBelow ? roomBelow || !roomAbove : !roomAbove && roomBelow;
-  const labelCenterY = below ? y + 14 : y - 14;
-  const rectX = WIDTH - labelWidth - 6;
-
-  return (
-    <>
-      <line
-        x1={0}
-        y1={y}
-        x2={WIDTH}
-        y2={y}
-        stroke={color}
-        strokeWidth={1.5}
-        strokeDasharray="6 5"
-        vectorEffect="non-scaling-stroke"
-      />
-      <rect
-        x={rectX}
-        y={labelCenterY - LABEL_HEIGHT / 2}
-        width={labelWidth}
-        height={LABEL_HEIGHT}
-        rx={4}
-        fill="#0b0e14"
-        fillOpacity={0.9}
-        stroke={color}
-        strokeOpacity={0.4}
-      />
-      <text
-        x={WIDTH - 12}
-        y={labelCenterY + 4}
-        textAnchor="end"
-        fontSize={11}
-        fontFamily="ui-monospace, monospace"
-        fill={color}
-      >
-        {text}
-      </text>
-    </>
-  );
+function toVolumeData(c: Candle) {
+  return {
+    time: c.time as UTCTimestamp,
+    value: c.volume,
+    color: c.close >= c.open ? "rgba(61,220,132,0.3)" : "rgba(255,77,79,0.3)",
+  };
 }
 
 export default function PriceChart({
-  points,
   goal = null,
   entry = null,
   currentPrice = null,
 }: {
-  points: PricePoint[];
   goal?: number | null;
   entry?: number | null;
   currentPrice?: number | null;
 }) {
-  const gradientId = useId();
-  const [hoverIndex, setHoverIndex] = useState<number | null>(null);
-
-  const { linePath, areaPath, coords, isUp, goalY, entryY } = useMemo(() => {
-    if (points.length < 2) {
-      return {
-        linePath: "",
-        areaPath: "",
-        coords: [] as [number, number][],
-        isUp: true,
-        goalY: null as number | null,
-        entryY: null as number | null,
-      };
+  // Read the saved timeframe during the first render so we don't fire a wasted
+  // request for the default one and then immediately refetch.
+  const [timeframe, setTimeframe] = useState<Interval>(() => {
+    if (typeof window === "undefined") return "1h";
+    try {
+      const stored = window.localStorage.getItem(INTERVAL_KEY) as Interval | null;
+      return stored && INTERVALS.some((i) => i.value === stored) ? stored : "1h";
+    } catch {
+      return "1h";
     }
+  });
+  const { candles, seedId, loading, error } = useKlines(timeframe);
+  const [hoveredTime, setHoveredTime] = useState<number | null>(null);
 
-    const prices = points.map((pt) => pt.p);
-    let min = Math.min(...prices);
-    let max = Math.max(...prices);
-    for (const extra of [goal, entry]) {
-      if (extra !== null) {
-        min = Math.min(min, extra);
-        max = Math.max(max, extra);
-      }
+  const containerRef = useRef<HTMLDivElement>(null);
+  const chartRef = useRef<IChartApi | null>(null);
+  const candleSeriesRef = useRef<ISeriesApi<"Candlestick"> | null>(null);
+  const volSeriesRef = useRef<ISeriesApi<"Histogram"> | null>(null);
+  const maSeriesRef = useRef<ISeriesApi<"Line">[]>([]);
+  const goalLineRef = useRef<IPriceLine | null>(null);
+  const entryLineRef = useRef<IPriceLine | null>(null);
+
+  function pickTimeframe(next: Interval) {
+    setTimeframe(next);
+    try {
+      window.localStorage.setItem(INTERVAL_KEY, next);
+    } catch {
+      // localStorage unavailable, skip persisting
     }
-    const range = max - min || max * 0.001 || 1;
+  }
 
-    const toY = (price: number) =>
-      HEIGHT - PADDING - ((price - min) / range) * (HEIGHT - PADDING * 2);
+  // Build the chart once.
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
 
-    const coords = points.map((pt, i) => {
-      const x = (i / (points.length - 1)) * WIDTH;
-      return [x, toY(pt.p)] as [number, number];
+    const chart = createChart(el, {
+      // Let the library own sizing: measuring clientWidth here can read 0 (hidden
+      // tab / layout not settled) and then never self-correct.
+      autoSize: true,
+      layout: {
+        background: { type: ColorType.Solid, color: "transparent" },
+        textColor: AXIS_TEXT,
+        fontFamily: MONO,
+        fontSize: 11,
+      },
+      grid: {
+        vertLines: { color: GRID },
+        horzLines: { color: GRID },
+      },
+      crosshair: {
+        mode: CrosshairMode.Normal,
+        vertLine: { color: CROSSHAIR, style: LineStyle.Dashed, labelBackgroundColor: GRID },
+        horzLine: { color: CROSSHAIR, style: LineStyle.Dashed, labelBackgroundColor: GRID },
+      },
+      rightPriceScale: { borderColor: GRID },
+      timeScale: { borderColor: GRID, timeVisible: true, secondsVisible: false },
     });
 
-    const line = coords
-      .map(([x, y], i) => `${i === 0 ? "M" : "L"}${x.toFixed(2)},${y.toFixed(2)}`)
-      .join(" ");
+    const candleSeries = chart.addSeries(CandlestickSeries, {
+      upColor: UP,
+      downColor: DOWN,
+      borderUpColor: UP,
+      borderDownColor: DOWN,
+      wickUpColor: UP,
+      wickDownColor: DOWN,
+      priceFormat: { type: "price", precision: 2, minMove: 0.01 },
+    });
 
-    const area = `${line} L${WIDTH},${HEIGHT} L0,${HEIGHT} Z`;
+    const volSeries = chart.addSeries(HistogramSeries, {
+      priceScaleId: "",
+      priceFormat: { type: "volume" },
+      priceLineVisible: false,
+      lastValueVisible: false,
+    });
+    chart.priceScale("").applyOptions({ scaleMargins: { top: 0.8, bottom: 0 } });
 
-    return {
-      linePath: line,
-      areaPath: area,
-      coords,
-      isUp: prices[prices.length - 1] >= prices[0],
-      goalY: goal !== null ? toY(goal) : null,
-      entryY: entry !== null ? toY(entry) : null,
-    };
-  }, [points, goal, entry]);
-
-  if (points.length < 2) {
-    return (
-      <div className="h-[120px] flex items-center justify-center text-xs sm:text-sm text-neutral-500 font-mono">
-        Loading price chart...
-      </div>
+    const maSeries = MAS.map(({ color }) =>
+      chart.addSeries(LineSeries, {
+        color,
+        lineWidth: 1,
+        priceLineVisible: false,
+        lastValueVisible: false,
+        crosshairMarkerVisible: false,
+      })
     );
-  }
 
-  const color = isUp ? "#3ddc84" : "#ff4d4f";
+    chart.subscribeCrosshairMove((param) => {
+      setHoveredTime(typeof param.time === "number" ? param.time : null);
+    });
+
+    chartRef.current = chart;
+    candleSeriesRef.current = candleSeries;
+    volSeriesRef.current = volSeries;
+    maSeriesRef.current = maSeries;
+
+    return () => {
+      chart.remove();
+      chartRef.current = null;
+      candleSeriesRef.current = null;
+      volSeriesRef.current = null;
+      maSeriesRef.current = [];
+      goalLineRef.current = null;
+      entryLineRef.current = null;
+    };
+  }, []);
+
+  // Fresh dataset (first load or timeframe switch) -> replace everything.
+  useEffect(() => {
+    if (seedId === 0 || candles.length === 0) return;
+    const candleSeries = candleSeriesRef.current;
+    const volSeries = volSeriesRef.current;
+    if (!candleSeries || !volSeries) return;
+
+    candleSeries.setData(candles.map(toCandleData));
+    volSeries.setData(candles.map(toVolumeData));
+    maSeriesRef.current.forEach((series, i) => {
+      series.setData(
+        sma(candles, MAS[i].period).map((p) => ({
+          time: p.time as UTCTimestamp,
+          value: p.value,
+        }))
+      );
+    });
+    chartRef.current?.timeScale().fitContent();
+    // Intentionally keyed on seedId only: `candles` mutates on every live tick,
+    // and those are handled by the update() effect below.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [seedId]);
+
+  // Live tick -> patch just the last candle so zoom/scroll stay put.
+  useEffect(() => {
+    if (candles.length === 0) return;
+    const candleSeries = candleSeriesRef.current;
+    const volSeries = volSeriesRef.current;
+    if (!candleSeries || !volSeries) return;
+
+    const last = candles[candles.length - 1];
+    candleSeries.update(toCandleData(last));
+    volSeries.update(toVolumeData(last));
+    maSeriesRef.current.forEach((series, i) => {
+      const value = smaAt(candles, MAS[i].period, candles.length - 1);
+      if (value !== null) {
+        series.update({ time: last.time as UTCTimestamp, value });
+      }
+    });
+  }, [candles]);
+
   const goalReached = goal !== null && currentPrice !== null && currentPrice >= goal;
-  const goalColor = goalReached ? "#3ddc84" : "#f7931a";
-  const entryColor = "#38bdf8";
 
-  function handleMouseMove(e: MouseEvent<HTMLDivElement>) {
-    const rect = e.currentTarget.getBoundingClientRect();
-    const relX = (e.clientX - rect.left) / rect.width;
-    const idx = Math.round(relX * (points.length - 1));
-    setHoverIndex(Math.min(points.length - 1, Math.max(0, idx)));
-  }
+  useEffect(() => {
+    const candleSeries = candleSeriesRef.current;
+    if (!candleSeries) return;
 
-  const hovered = hoverIndex !== null ? points[hoverIndex] : null;
-  const hoveredCoord = hoverIndex !== null ? coords[hoverIndex] : null;
+    if (goalLineRef.current) {
+      candleSeries.removePriceLine(goalLineRef.current);
+      goalLineRef.current = null;
+    }
+    if (goal !== null) {
+      goalLineRef.current = candleSeries.createPriceLine({
+        price: goal,
+        color: goalReached ? UP : GOAL_COLOR,
+        lineWidth: 1,
+        lineStyle: LineStyle.Dashed,
+        axisLabelVisible: true,
+        title: goalReached ? "Target hit" : "Target",
+      });
+    }
+  }, [goal, goalReached]);
+
+  useEffect(() => {
+    const candleSeries = candleSeriesRef.current;
+    if (!candleSeries) return;
+
+    if (entryLineRef.current) {
+      candleSeries.removePriceLine(entryLineRef.current);
+      entryLineRef.current = null;
+    }
+    if (entry !== null) {
+      entryLineRef.current = candleSeries.createPriceLine({
+        price: entry,
+        color: ENTRY_COLOR,
+        lineWidth: 1,
+        lineStyle: LineStyle.Dashed,
+        axisLabelVisible: true,
+        title: "Entry",
+      });
+    }
+  }, [entry]);
+
+  const shownIndex =
+    hoveredTime !== null
+      ? candles.findIndex((c) => c.time === hoveredTime)
+      : candles.length - 1;
+  const shown = shownIndex >= 0 ? candles[shownIndex] : null;
+  const changePercent = shown ? ((shown.close - shown.open) / shown.open) * 100 : 0;
+  const rangePercent = shown ? ((shown.high - shown.low) / shown.low) * 100 : 0;
 
   return (
-    <div
-      className="relative w-full h-[120px]"
-      onMouseMove={handleMouseMove}
-      onMouseLeave={() => setHoverIndex(null)}
-    >
-      <svg
-        viewBox={`0 0 ${WIDTH} ${HEIGHT}`}
-        preserveAspectRatio="none"
-        className="w-full h-full"
-      >
-        <defs>
-          <linearGradient id={gradientId} x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stopColor={color} stopOpacity={0.35} />
-            <stop offset="100%" stopColor={color} stopOpacity={0} />
-          </linearGradient>
-        </defs>
-        <path d={areaPath} fill={`url(#${gradientId})`} stroke="none" />
-        <path
-          d={linePath}
-          fill="none"
-          stroke={color}
-          strokeWidth={2}
-          vectorEffect="non-scaling-stroke"
-        />
-        {entryY !== null && (
-          <ChartPriceLine
-            y={entryY}
-            color={entryColor}
-            text={`Entry $${formatUsd(entry as number)}`}
-            preferBelow
-          />
-        )}
-        {goalY !== null && (
-          <ChartPriceLine
-            y={goalY}
-            color={goalColor}
-            text={`${goalReached ? "Reached · " : "Target "}$${formatUsd(goal as number)}`}
-          />
-        )}
-        {hoveredCoord && (
-          <>
-            <line
-              x1={hoveredCoord[0]}
-              y1={0}
-              x2={hoveredCoord[0]}
-              y2={HEIGHT}
-              stroke="#3a3f4b"
-              strokeWidth={1}
-              vectorEffect="non-scaling-stroke"
-            />
-            <circle
-              cx={hoveredCoord[0]}
-              cy={hoveredCoord[1]}
-              r={4}
-              fill={color}
-              stroke="#0b0e14"
-              strokeWidth={2}
-              vectorEffect="non-scaling-stroke"
-            />
-          </>
-        )}
-      </svg>
+    <div className="flex flex-col gap-2">
+      <div className="flex flex-wrap items-center gap-1 font-mono text-[11px] sm:text-xs">
+        {INTERVALS.map((i) => (
+          <button
+            key={i.value}
+            onClick={() => pickTimeframe(i.value)}
+            className={`px-2 py-1 rounded transition-colors ${
+              timeframe === i.value
+                ? "bg-btc text-black font-semibold"
+                : "text-neutral-500 hover:text-neutral-200"
+            }`}
+          >
+            {i.label}
+          </button>
+        ))}
+      </div>
 
-      {hovered && hoveredCoord && (
-        <div
-          className="pointer-events-none absolute -translate-x-1/2 -translate-y-[calc(100%+8px)] whitespace-nowrap rounded-md border border-border bg-panel px-2 py-1 font-mono text-xs shadow-lg"
-          style={{
-            left: `${(hoveredCoord[0] / WIDTH) * 100}%`,
-            top: `${(hoveredCoord[1] / HEIGHT) * 100}%`,
-          }}
-        >
-          <div className="text-neutral-100">${formatUsd(hovered.p)}</div>
-          <div className="text-neutral-500">
-            {new Date(hovered.t).toLocaleTimeString("en-US")}
+      {shown && (
+        <div className="flex flex-col gap-0.5 font-mono text-[10px] sm:text-[11px]">
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5">
+            <span className="text-neutral-500">
+              {new Date(shown.time * 1000).toLocaleString("en-US", {
+                month: "short",
+                day: "numeric",
+                hour: "2-digit",
+                minute: "2-digit",
+              })}
+            </span>
+            <OhlcItem label="O" value={shown.open} />
+            <OhlcItem label="H" value={shown.high} />
+            <OhlcItem label="L" value={shown.low} />
+            <OhlcItem label="C" value={shown.close} />
+            <span className={changePercent >= 0 ? "text-profit" : "text-loss"}>
+              {formatPercent(changePercent)}
+            </span>
+            <span className="text-neutral-500">Range {rangePercent.toFixed(2)}%</span>
+          </div>
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5">
+            {MAS.map(({ period, color }) => {
+              const value = smaAt(candles, period, shownIndex);
+              return (
+                <span key={period} style={{ color }}>
+                  MA({period}) {value !== null ? formatUsd(value) : "—"}
+                </span>
+              );
+            })}
           </div>
         </div>
       )}
+
+      <div className="relative w-full h-[260px] sm:h-[380px]">
+        <div ref={containerRef} className="absolute inset-0" />
+        {(loading || error) && (
+          <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+            <span
+              className={`font-mono text-xs ${error ? "text-loss" : "text-neutral-500"}`}
+            >
+              {error ?? "Loading chart..."}
+            </span>
+          </div>
+        )}
+      </div>
     </div>
+  );
+}
+
+function OhlcItem({ label, value }: { label: string; value: number }) {
+  return (
+    <span className="text-neutral-500">
+      {label} <span className="text-neutral-200">{formatUsd(value)}</span>
+    </span>
   );
 }

@@ -26,14 +26,12 @@ import {
   upsertPriceMarks,
   type CommandHistoryItem,
 } from "@/lib/supabase";
-import PriceChart, { type PricePoint } from "./PriceChart";
+import PriceChart from "./PriceChart";
 import ProfitPanel, { type ProfitEntry } from "./ProfitPanel";
 import Navbar from "./Navbar";
 import CommandReference from "./CommandReference";
 
 const HISTORY_LIMIT = 10;
-const CHART_APPEND_MS = 30_000;
-const CHART_POINTS_LIMIT = 300;
 
 export default function Calculator({ session }: { session: Session }) {
   const userId = session.user.id;
@@ -45,7 +43,6 @@ export default function Calculator({ session }: { session: Session }) {
   const [historyOpen, setHistoryOpen] = useState(false);
   const [commandsOpen, setCommandsOpen] = useState(false);
   const [profitBook, setProfitBook] = useState<ProfitEntry[]>([]);
-  const [priceHistory, setPriceHistory] = useState<PricePoint[]>([]);
   const [goalPrice, setGoalPrice] = useState<number | null>(null);
   const [entryPrice, setEntryPrice] = useState<number | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -55,7 +52,6 @@ export default function Calculator({ session }: { session: Session }) {
     connected: priceConnected,
     flash: priceFlash,
   } = useLivePrice();
-  const currentPriceRef = useRef<number | null>(null);
   const goalPriceRef = useRef<number | null>(null);
   const entryPriceRef = useRef<number | null>(null);
 
@@ -65,10 +61,6 @@ export default function Calculator({ session }: { session: Session }) {
     return () => {
       document.title = "BTC Profit Calculator";
     };
-  }, [currentPrice]);
-
-  useEffect(() => {
-    currentPriceRef.current = currentPrice;
   }, [currentPrice]);
 
   useEffect(() => {
@@ -92,45 +84,6 @@ export default function Calculator({ session }: { session: Session }) {
       .catch((err) => {
         setError(err instanceof Error ? err.message : "Could not load your data.");
       });
-  }, []);
-
-  useEffect(() => {
-    let cancelled = false;
-
-    async function fetchChartHistory() {
-      try {
-        const res = await fetch(
-          "https://api.coingecko.com/api/v3/coins/bitcoin/market_chart?vs_currency=usd&days=1"
-        );
-        if (!res.ok) throw new Error("bad response");
-        const data = await res.json();
-        const prices: [number, number][] = data?.prices ?? [];
-        if (!cancelled && prices.length > 0) {
-          setPriceHistory(prices.map(([t, p]) => ({ t, p })));
-        }
-      } catch {
-        // chart seed failed, live ticks will still populate it over time
-      }
-    }
-
-    fetchChartHistory();
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  useEffect(() => {
-    const interval = setInterval(() => {
-      const price = currentPriceRef.current;
-      if (price === null) return;
-      setPriceHistory((prev) => {
-        const next = [...prev, { t: Date.now(), p: price }];
-        return next.length > CHART_POINTS_LIMIT
-          ? next.slice(next.length - CHART_POINTS_LIMIT)
-          : next;
-      });
-    }, CHART_APPEND_MS);
-    return () => clearInterval(interval);
   }, []);
 
   function logCommand(
@@ -354,12 +307,7 @@ export default function Calculator({ session }: { session: Session }) {
                   )}
                 </div>
               )}
-              <PriceChart
-                points={priceHistory}
-                goal={goalPrice}
-                entry={entryPrice}
-                currentPrice={currentPrice}
-              />
+              <PriceChart goal={goalPrice} entry={entryPrice} currentPrice={currentPrice} />
             </div>
 
             <div className="bg-panel border border-border rounded-xl p-4 sm:p-5 flex flex-col gap-3">
